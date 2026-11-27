@@ -81,6 +81,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
   profiles?: readonly StoredSourceProfile[];
   remoteLibraries?: ReturnType<Store["remoteLibraries"]>;
   mediaConnections?: ReturnType<Store["mediaConnections"]>;
+  internet?: "online" | "offline";
 } = {}): Promise<Harness> => {
   const viewer = options.viewer === undefined ? admin : options.viewer;
   const prefs = { ...defaultPrefs(), uiLanguage: "cs" as const, ...options.prefs };
@@ -127,6 +128,7 @@ const mount = async (records: AddonRecord[] = [], meta: MetaItem | null = null, 
     ownRecord: (relative, records) => (records[relative]?.id ? records[relative] : undefined),
     metaStore: { qualifiedMeta: () => options.bound ?? ({}) } as unknown as LibraryMetaStore,
     externalIds: options.externalIds ?? { ids: async () => ({}) } as unknown as ExternalIdStore,
+    connectivity: { state: options.internet ?? "online" },
     subtitleDelay: () => 0,
     mediaSources: {} as unknown as CatalogDeps["mediaSources"],
     ...(options.imageProxy ? { imageProxy: options.imageProxy } : {}),
@@ -237,6 +239,25 @@ test("GET /api/meta/:type/:id reads the artwork metadata", async (t) => {
   const response = await api(harness.base, "/api/meta/movie/tt1");
   assert.equal(response.status, 200);
   assert.deepEqual(harness.lookups, [{ type: "movie", id: "tt1", language: "cs", artwork: true }], "the detail route asks for the wider artwork");
+});
+
+test("GET /api/meta/:type/:id answers 503 err.offline when offline metadata is missing", async (t) => {
+  const harness = await mount([], null, { internet: "offline" });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/meta/movie/tt1");
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    error: "The server has no internet connection right now.",
+    messageKey: "err.offline",
+  });
+});
+
+test("GET /api/meta/:type/:id still answers 404 err.metaNotFound when online", async (t) => {
+  const harness = await mount([], null, { internet: "online" });
+  t.after(harness.close);
+  const response = await api(harness.base, "/api/meta/movie/tt1");
+  assert.equal(response.status, 404);
+  assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.metaNotFound");
 });
 
 test("an explicit gallery request keeps metadata usable without a TMDB key", async (t) => {

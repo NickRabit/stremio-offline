@@ -55,6 +55,7 @@ const TABLE: Record<string, ErrorClassification> = {
   "err.retryingAfterDrop": { category: "network", retry: "automatic" },
   "err.sourceFailedTryingNext": { category: "source", retry: "automatic" },
   "err.debridTimeout": { category: "network", retry: "manual" },
+  "err.offline": { category: "network", retry: "automatic" },
   "err.debridWrongEpisode": { category: "source", retry: "manual" },
   "err.debridNotConfigured": { category: "configuration", retry: "action" },
   "err.debridTokenMissing": { category: "configuration", retry: "action" },

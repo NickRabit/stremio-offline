@@ -12,7 +12,15 @@ export interface MetaCache<V> {
   /** `{ hit: true, value }` for a fresh answer or a fresh remembered failure (value null),
    *  `{ hit: false }` otherwise. A read marks the entry as recently used. */
   get(key: string): { hit: true; value: V | null } | { hit: false };
-  set(key: string, value: V): void;
+  /** `partial` marks an answer a provider failed to complete; `dropPartial` forgets those. A
+   *  partial answer to a lookup that began before the last `dropPartial` (`since`, from
+   *  `generation`) is not stored at all: it was read while the internet was still down. */
+  set(key: string, value: V, partial?: boolean, since?: number): void;
+  /** Forgets every partial answer, so the next reader asks again: called once the internet is
+   *  back, without asking anything itself. */
+  dropPartial(): void;
+  /** Bumped by every `dropPartial`; a lookup reads it when it starts. */
+  readonly generation: number;
   /** Remember that this key has no answer, for `failureTtlMs`. */
   fail(key: string): void;
   /** One lookup per key at a time: a caller asking while the key is already being looked up
@@ -26,6 +34,7 @@ interface Entry<V> {
   value: V | null;
   at: number;
   failure: boolean;
+  partial?: boolean;
 }
 
 /** Successful metadata lives for six hours, while a miss is held briefly so repeated Home
@@ -34,6 +43,7 @@ export function createMetaCache<V>(options: MetaCacheOptions): MetaCache<V> {
   const entries = new Map<string, Entry<V>>();
   const pending = new Map<string, Promise<V | null>>();
   const now = options.now ?? Date.now;
+  let generation = 0;
 
   const remember = (key: string, entry: Entry<V>): void => {
     entries.delete(key);
@@ -57,8 +67,16 @@ export function createMetaCache<V>(options: MetaCacheOptions): MetaCache<V> {
       remember(key, entry);
       return { hit: true, value: entry.value };
     },
-    set(key, value) {
-      remember(key, { value, at: now(), failure: false });
+    set(key, value, partial = false, since) {
+      if (partial && since !== undefined && since !== generation) return;
+      remember(key, { value, at: now(), failure: false, ...(partial ? { partial: true } : {}) });
+    },
+    dropPartial() {
+      generation += 1;
+      for (const [key, entry] of [...entries]) if (entry.partial) entries.delete(key);
+    },
+    get generation() {
+      return generation;
     },
     fail(key) {
       remember(key, { value: null, at: now(), failure: true });

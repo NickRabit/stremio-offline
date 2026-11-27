@@ -1,12 +1,13 @@
 import { AppError } from "./errors.js";
 import nodeDns, { type LookupAddress, type LookupOptions } from "node:dns";
-import { type LookupFunction } from "node:net";
+import { isIP, type LookupFunction } from "node:net";
 import { Agent, fetch as undiciFetch } from "undici";
 // undici 8 negotiates HTTP/2 by default. The checked transports stay on HTTP/1.1, as they were
 // with undici 7: streams and ranges through addons and media servers are proven on it, and
 // HTTP/2 is a change of its own, not part of a version update.
 import { addressRefusal, type AddressPolicy } from "./address-policy.js";
 import { log } from "./logger.js";
+import { connectivity, isOfflineError, OfflineError } from "./connectivity.js";
 
 const STRICT: AddressPolicy = { allowLan: false, allowLoopback: false };
 function privateReason(ip: string): string | undefined { return addressRefusal(ip, STRICT); }
@@ -44,7 +45,10 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
 
   let results: LookupAddress[];
   try { results = await lookupAll(host); }
-  catch { throw new Error(`The name ${host} could not be resolved to an IP address.`); }
+  catch (error) {
+    if (isOfflineError(error)) throw error;
+    throw new Error(`The name ${host} could not be resolved to an IP address.`);
+  }
   if (!results.length) throw new Error(`The name ${host} has no IP address.`);
 
   for (const entry of results) {
@@ -57,7 +61,7 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   return url;
 }
 
-type LookupResult = (error: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void;
+type LookupResult = (error: Error | null, address?: string | LookupAddress[], family?: number) => void;
 type DnsLookup = (hostname: string, options: LookupOptions, callback: LookupResult) => void;
 
 const systemLookup: DnsLookup = (hostname, options, callback) => {
@@ -70,20 +74,89 @@ let dnsLookup: DnsLookup = systemLookup;
  *  Pass nothing to restore the system resolver. Production never calls it. */
 export function setDnsLookup(lookup?: DnsLookup): void {
   dnsLookup = lookup ?? systemLookup;
+  homeAnswered.clear();
+  unclassifiedAddonHosts.clear();
 }
+
+/** A name the home network answers for: one listed in ALLOW_ADDON_HOSTS, a single label, or a
+ *  local suffix. ALLOW_PRIVATE_ADDONS=1 alone does not make a public name one. */
+const HOME_SUFFIXES = [".local", ".lan", ".home", ".internal", ".home.arpa", ".localdomain"];
+/** Names that answered with a home address while private addresses are allowed: an addon on the
+ *  owner's own domain behind split DNS. The router answers them without the internet. */
+const homeAnswered = new Set<string>();
+const unclassifiedAddonHosts = new Set<string>();
+
+export function restoreAddonHosts(manifestUrls: string[]): void {
+  for (const manifestUrl of manifestUrls) {
+    const url = URL.parse(manifestUrl);
+    if (url) unclassifiedAddonHosts.add(url.hostname.toLowerCase());
+  }
+}
+
+const answerAddresses = (address: string | LookupAddress[] | undefined): string[] =>
+  Array.isArray(address) ? address.map((answer) => answer.address) : address ? [address] : [];
+const homeNetworkName = (host: string): boolean =>
+  homeAnswered.has(host)
+  || !host.includes(".")
+  || HOME_SUFFIXES.some((suffix) => host.endsWith(suffix))
+  || (process.env.ALLOW_ADDON_HOSTS ?? "").split(",").map((entry) => entry.trim().toLowerCase()).includes(host);
+
+const checkedAndRecordedLookup: DnsLookup = (hostname, options, callback) => {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const family = isIP(host);
+  if (family) {
+    if (options.all) callback(null, [{ address: host, family }]);
+    else callback(null, host, family);
+    return;
+  }
+  // A name of the home network may still resolve without the internet, and says nothing about it.
+  if (homeNetworkName(host)) {
+    dnsLookup(hostname, options, callback);
+    return;
+  }
+  const admitted = connectivity.admitLookup(hostname);
+  // After restart, allow one DNS lookup to identify an installed split-DNS addon.
+  const discoverHome = !admitted && process.env.ALLOW_PRIVATE_ADDONS === "1" && unclassifiedAddonHosts.delete(host);
+  if (!admitted && !discoverHome) {
+    callback(new OfflineError());
+    return;
+  }
+  dnsLookup(hostname, options, (error, address, answerFamily) => {
+    if (!error) unclassifiedAddonHosts.delete(host);
+    if (!error && privateAddressAllowed(host) && answerAddresses(address).some((answer) => privateReason(answer))) {
+      homeAnswered.add(host);
+      if (admitted) connectivity.releaseLookup();
+    } else if (!admitted) {
+      callback(new OfflineError());
+      return;
+    } else if (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      connectivity.recordLookupFailure(hostname, code);
+    } else {
+      connectivity.recordLookupSuccess(hostname);
+    }
+    callback(error, address, answerFamily);
+  });
+};
 
 const lookupAll = (host: string): Promise<LookupAddress[]> =>
   new Promise((resolve, reject) => {
-    dnsLookup(host, { all: true }, (error, address) => {
+    checkedAndRecordedLookup(host, { all: true }, (error, address) => {
       if (error) reject(error);
       else resolve(Array.isArray(address) ? address : []);
     });
   });
 
+// The probe and the cross-check ask the resolver directly: going through admitLookup would let
+// them take the slot a waiting request needs.
+connectivity.useResolver((host) => new Promise((resolve, reject) => {
+  dnsLookup(host, { all: true }, (error, address) => { if (error) reject(error); else resolve(address); });
+}));
+
 /** The agent asks this at connection time, so a name whose first answer was public cannot
  *  answer a private address when the socket is actually opened. */
 const checkedLookup: DnsLookup = (hostname, options, callback) => {
-  dnsLookup(hostname, options, (error, address, family) => {
+  checkedAndRecordedLookup(hostname, options, (error, address, family) => {
     if (error) { callback(error); return; }
     const answers = Array.isArray(address) ? address : [{ address: address as string, family: family ?? 4 }];
     for (const answer of answers) {

@@ -85,6 +85,7 @@ async function mount(options: {
     ownRecord: () => undefined,
     metaStore: { qualifiedMeta: () => ({}) } as unknown as LibraryMetaStore,
     externalIds: { ids: async () => ({}) } as unknown as ExternalIdStore,
+    connectivity: { state: "online" },
     subtitleDelay: () => 0,
     mediaSources: {} as unknown as CatalogDeps["mediaSources"],
     ...(options.imageProxy ? { imageProxy: options.imageProxy } : {}),

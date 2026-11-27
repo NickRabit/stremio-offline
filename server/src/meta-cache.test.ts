@@ -107,3 +107,31 @@ test("a failed shared lookup is not kept for the next caller", async () => {
   await assert.rejects(cache.join("movie:tt1", () => Promise.reject(new Error("down"))));
   assert.equal(await cache.join("movie:tt1", () => Promise.resolve("up")), "up");
 });
+
+test("dropPartial forgets only the answers a provider failed to complete", () => {
+  const cache = createMetaCache<string>({ ttlMs: 60_000, failureTtlMs: 1_000, limit: 10 });
+  cache.set("full", "complete");
+  cache.set("partial", "half", true);
+  cache.fail("missing");
+  cache.dropPartial();
+  assert.deepEqual(cache.get("full"), { hit: true, value: "complete" });
+  assert.deepEqual(cache.get("partial"), { hit: false });
+  assert.deepEqual(cache.get("missing"), { hit: true, value: null });
+  // A complete answer later replaces the partial mark.
+  cache.set("partial", "half", true);
+  cache.set("partial", "whole");
+  cache.dropPartial();
+  assert.deepEqual(cache.get("partial"), { hit: true, value: "whole" });
+});
+
+test("a partial answer to a lookup that began before the internet came back is not stored", () => {
+  const cache = createMetaCache<string>({ ttlMs: 60_000, failureTtlMs: 1_000, limit: 10 });
+  const since = cache.generation;
+  cache.dropPartial();
+  cache.set("late", "half", true, since);
+  assert.deepEqual(cache.get("late"), { hit: false });
+  cache.set("whole", "complete", false, since);
+  assert.deepEqual(cache.get("whole"), { hit: true, value: "complete" });
+  cache.set("fresh", "half", true, cache.generation);
+  assert.deepEqual(cache.get("fresh"), { hit: true, value: "half" });
+});

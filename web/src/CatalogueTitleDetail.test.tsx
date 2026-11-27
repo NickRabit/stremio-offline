@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { ChildModeProvider } from "./child-mode";
-import { setLocale } from "./i18n";
+import { setLocale, t } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
 import { clearTitleEnrichment } from "./title-enrichment";
 import type { Meta, RemoteLibrary, SourceRuleVerdict, Stream, Video } from "./types";
@@ -184,6 +184,14 @@ describe("CatalogueTitleDetail metadata", () => {
     expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
+  it("shows the translated offline text when metadata fails with err.offline", async () => {
+    metaReply = () => json({ error: "The server has no internet connection right now. Only local files can be played.", messageKey: "err.offline" }, 503);
+    await render();
+    const error = host.querySelector(".remote-error")!;
+    expect(error.textContent).toContain(t("err.offline"));
+    expect(error.textContent).not.toContain(t("err.metaNotFound"));
+  });
+
   it("says so and offers the retry when the metadata read fails", async () => {
     metaReply = () => json({ error: "boom" }, 500);
     await render();
@@ -213,6 +221,108 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("enables Play from a local copy while an addon never settles", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+    expect(playButton().disabled).toBe(false);
+    expect(host.querySelector(".detail-tech")?.textContent).toContain("Film.mkv");
+    await click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
+  it("keeps the local copy under Play when a better addon row answers late under a rule", async () => {
+    const late = deferred<Response>();
+    const meetingLocal = { ...local("Films/Film.mkv", "Film.mkv", 500), rules: { balanced: ruleVerdict([0, 1], "meets") } };
+    const betterAddon = { ...addon("a1", "1080p", 1_000), rules: { balanced: ruleVerdict([0, 0], "meets") } };
+    localReply = () => json([meetingLocal]);
+    streamReply = () => late.promise;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() },
+      defaultSort: "rule:balanced",
+    });
+    expect(host.querySelector(".detail-tech")?.textContent).toContain("Film.mkv");
+    await act(async () => { late.resolve(json([betterAddon])); });
+    await flush();
+    await click(playButton());
+    expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
+  it("resumes a local copy while an addon never settles", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([{ ...local("Films/Film.mkv", "Film.mkv"), stableKey: "own:film" }]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "own:film" } } });
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
+  it("offline, offers the local copy at the saved position instead of waiting for the addon row", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } },
+      offline: true, resumePosition: 1930,
+    });
+    expect(onPlay).not.toHaveBeenCalled();
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("32:10");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false, 1930);
+    expect(host.querySelector(".offline-resume")).toBeNull();
+  });
+
+  it("offline, never swaps the watched addon row for the local copy on its own", async () => {
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => json({ error: "offline" }, 503);
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } },
+      offline: true, resumePosition: 60,
+    });
+    await flush();
+    expect(onPlay).not.toHaveBeenCalled();
+    expect(host.querySelector(".offline-resume button")).not.toBeNull();
+  });
+
+  it("offline, takes the position from the card when the progress list does not hold it", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({
+      target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row", position: 1930 } },
+      offline: true,
+    });
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("32:10");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false, 1930);
+  });
+
+  it("online, shows no offline offer", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } }, resumePosition: 60 });
+    expect(host.querySelector(".offline-resume")).toBeNull();
+  });
+
+  it("does not resume an addon row before the addons answer", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } } });
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("stays busy when there is no local copy and an addon has not answered", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    streamReply = () => hung;
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+    expect(playButton().disabled).toBe(true);
+    expect(host.querySelector(".detail-tech")).toBeNull();
+  });
+
   it("shows rows as providers answer and waits for all before the detail stops being pending", async () => {
     providerReply = () => json([{ key: "fast", name: "Fast" }, { key: "slow", name: "Slow" }]);
     const slow = deferred<Response>();
@@ -526,6 +636,35 @@ describe("CatalogueTitleDetail series", () => {
     expect(calls.streams.at(-1)!.pathname).toBe("/api/streams/series/tt-series%3A1%3A1");
     await click(playButton());
     expect(onPlay).toHaveBeenLastCalledWith(expect.objectContaining({ sourceId: "large" }), expect.objectContaining({ season: 1, episode: 1, videoId: "tt-series:1:1" }), false);
+  });
+
+  it("offline, offers the local copy for an episode the addon names by its own id", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Show/S01E02.mkv", "S01E02.mkv")]);
+    streamReply = () => hung;
+    const own = videos.map((video) => ({ ...video, id: `kitsu:42:${video.episode}` }));
+    const { onPlay } = await render({
+      target: { type: "series", id: "tt-series", name: "A show", season: 1, episode: 2, initialMeta: series(own), resume: { stableKey: "addon:row", position: 600 } },
+      offline: true,
+    });
+    const offer = host.querySelector<HTMLButtonElement>(".offline-resume button")!;
+    expect(offer.textContent).toContain("10:00");
+    await click(offer);
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Show/S01E02.mkv" }), expect.objectContaining({ season: 1, episode: 2 }), false, 600);
+  });
+
+  it("offline, drops the local resume offer once another episode is picked", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Show/S01E02.mkv", "S01E02.mkv")]);
+    streamReply = () => hung;
+    await render({
+      target: { type: "series", id: "tt-series", name: "A show", season: 1, episode: 2, videoId: "tt-series:1:2", initialMeta: series(videos), resume: { stableKey: "addon:row", position: 600 } },
+      offline: true,
+    });
+    expect(host.querySelector(".offline-resume button")?.textContent).toContain("10:00");
+    await click(host.querySelector(".catalogue-episodes .episode-current button"));
+    await click(episodeRows()[0]!);
+    expect(host.querySelector(".offline-resume")).toBeNull();
   });
 
   it("follows the episode that is playing without overriding a later manual choice", async () => {

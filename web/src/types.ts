@@ -498,7 +498,7 @@ export type StartView = "catalog" | "home" | "library";
 export type LibraryShelf = "resume" | "episodes" | "favorites";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
-export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean; searchEverywhere?: boolean }
+export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean; searchEverywhere?: boolean; internet?: "online" | "offline"; offlineSince?: string }
 export interface DiagnosticsSession {
   id: string; mode: string; hardware: boolean; generation: number; title?: string;
   video?: string; audio?: string; audioTrack: number; subtitleTrack: number | null; quality: number | null;

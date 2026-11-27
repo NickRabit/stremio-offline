@@ -28,7 +28,7 @@ import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, publicAddonRestricted } from "./security.js";
+import { publicAddon, publicAddonRestricted, restoreAddonHosts } from "./security.js";
 import { withProxiedArtwork } from "./addon-view.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
@@ -152,6 +152,8 @@ import { SearchError } from "./search-contracts.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { ASSET_CACHE_CONTROL, precompressedAssets } from "./static-assets.js";
 import { createMetaCache } from "./meta-cache.js";
+import { StaleMetaStore } from "./meta-stale.js";
+import { connectivity } from "./connectivity.js";
 import { PathReservations, queuedItemPaths, reservationPause } from "./path-reservations.js";
 import { createLibraryPathBusy, createLibraryPathsBusy, libraryWriting, type LibraryBusyDeps } from "./library-busy.js";
 
@@ -173,6 +175,8 @@ const avatarStore = new AvatarStore(DATA_DIR);
 /** When this app first met each library file, so "Recently added" is not the file's own date. */
 const seen = new LibrarySeenStore(DATA_DIR);
 const fingerprints = new LibraryFingerprints();
+/** Last good detail metadata, read only after a live lookup fails while offline. */
+const staleMeta = new StaleMetaStore();
 /** The log bundles clients upload, one JSON file each under the data directory. */
 const clientLogs = new ClientLogStore(DATA_DIR);
 /** The encrypted provider tokens and the administration/browsing service over the stored
@@ -214,6 +218,7 @@ try {
     seen.attachDatabase(database);
     fingerprints.attachDatabase(database);
     externalIds.attachDatabase(database);
+    staleMeta.attachDatabase(database);
   }
 } catch (error) {
   log("ERROR", "The application database could not be opened", {
@@ -224,6 +229,7 @@ try {
   throw error;
 }
 await store.load();
+restoreAddonHosts(store.addons().map((addon) => addon.manifestUrl));
 reportProgress();
 await mediaServers.initialize();
 reportProgress();
@@ -1045,13 +1051,19 @@ const publicAddonView = (addon: AddonRecord) =>
     ? withProxiedArtwork(publicAddonRestricted(addon), images)
     : withProxiedArtwork(publicAddon(addon), images));
 
-app.get("/api/status", (_req, res) => res.json({
-  status: "ok",
-  ...build,
-  restricted: restrictedMode(),
-  secure: secureMode(),
-  searchEverywhere: searchEverywhereEnabled(),
-}));
+app.get("/api/status", (_req, res) => {
+  connectivity.probeIfDue();
+  const offlineSince = connectivity.offlineSince;
+  res.json({
+    status: "ok",
+    ...build,
+    restricted: restrictedMode(),
+    secure: secureMode(),
+    searchEverywhere: searchEverywhereEnabled(),
+    internet: connectivity.state,
+    ...(offlineSince ? { offlineSince } : {}),
+  });
+});
 // A manifest is a snapshot from the moment the addon was added: its catalogues,
 // resources and id prefixes decide what the addon is asked for, so a stale copy
 // quietly hides catalogues and skips sources. Refreshing rewrites the manifest and
@@ -1086,16 +1098,16 @@ if (autoRefreshEnabled()) {
   }, AUTO_REFRESH_FIRST_MS).unref();
 }
 registerAddonsRoutes(app, { ...routeContext, storeRefreshed, publicAddonView });
-const tmdbProvider = (language: string): MetaProvider | undefined => {
+const tmdbProvider = (language: string, outcome?: { failed: boolean }): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language }, undefined, signal) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language }, undefined, signal, outcome) : undefined;
 };
 /** The detail behind a binding: the same lookup, asking for the pictures as well. Only a
  *  title somebody just bound is read this way; the browsing paths leave the artwork to the
  *  catalogue so a tile does not change its face when TMDB happens to know the title. */
-const tmdbArtworkProvider = (language: string): MetaProvider | undefined => {
+const tmdbArtworkProvider = (language: string, outcome?: { failed: boolean }): MetaProvider | undefined => {
   const apiKey = store.settings().tmdbApiKey;
-  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language, artwork: true }, undefined, signal) : undefined;
+  return apiKey ? (type, id, signal) => tmdbMeta(type, id, { apiKey, language, artwork: true }, undefined, signal, outcome) : undefined;
 };
 const tmdbConfigOf = (language: string): TmdbConfig | undefined => {
   const apiKey = store.settings().tmdbApiKey;
@@ -1294,6 +1306,7 @@ const metaCache = createMetaCache<MetaItem>({
   failureTtlMs: 30 * 60_000,
   limit: 500,
 });
+connectivity.onOnline(() => metaCache.dropPartial());
 /** A lookup with no request in hand -- the artwork queue, a backfill, a job that has just
  *  finished -- reads the language of the one account. A caller that knows which person is
  *  asking passes that person's language. */
@@ -1333,9 +1346,10 @@ async function lookupMeta(
   opts: { interactive?: boolean; artwork?: boolean; signal?: AbortSignal; viewerKnown: boolean },
 ) {
   const outcome = { failed: false };
+  const since = metaCache.generation;
   const found = await metadata(
     sources, type, id, language,
-    opts.artwork ? tmdbArtworkProvider(language) : tmdbProvider(language),
+    opts.artwork ? tmdbArtworkProvider(language, outcome) : tmdbProvider(language, outcome),
     opts.interactive ?? opts.viewerKnown === true,
     opts.artwork === true,
     opts.signal,
@@ -1345,8 +1359,18 @@ async function lookupMeta(
   const value = found ? await deadArtwork.prune(found, opts.signal) : found;
   // Only a clean "nothing" is remembered, for half an hour: an addon that is down or slow
   // says nothing about the title, and the next reader asks again.
-  if (value && Object.keys(value).length > 0) metaCache.set(key, value);
-  else if (!opts.signal?.aborted && !outcome.failed) metaCache.fail(key);
+  if (value && Object.keys(value).length > 0) {
+    // Only the detail reading is kept: Home's enrichment would rewrite hundreds of rows on the NAS.
+    const full = opts.artwork ? await staleMeta.keep(key, value, outcome.failed) : value;
+    // A partial answer is asked again once the internet is back.
+    metaCache.set(key, full, outcome.failed, since);
+    return full;
+  }
+  if (opts.artwork && !opts.signal?.aborted && (outcome.failed || connectivity.state === "offline")) {
+    const stale = await staleMeta.get(key).catch(() => null);
+    if (stale) return stale;
+  }
+  if (!opts.signal?.aborted && !outcome.failed) metaCache.fail(key);
   return value;
 }
 // Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
@@ -1569,7 +1593,7 @@ const maintenance = createMaintenance({
   ],
 });
 registerCatalogRoutes(app, {
-  ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, nestedHidden,
+  ...routeContext, tmdbProvider, cachedMeta, prefsOf, libraryTarget, ownerOf, trackMedia, libraryKey, nestedHidden, connectivity,
   // The walk caches are declared below this call, so they are read inside the body rather
   // than captured here: a direct reference would throw in the temporal dead zone at start-up.
   localCopies: async (type, id, viewer) => {

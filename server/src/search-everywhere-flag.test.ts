@@ -36,9 +36,10 @@ test("/api/status reports the search feature as off when the variable is 0", asy
   try {
     const response = await fetch(`${server.base}/api/status`);
     assert.equal(response.status, 200);
-    const body = await response.json() as { status?: string; searchEverywhere?: boolean };
+    const body = await response.json() as { status?: string; searchEverywhere?: boolean; internet?: string };
     assert.equal(body.status, "ok");
     assert.equal(body.searchEverywhere, false);
+    assert.equal(body.internet, "online");
 
     const login = await fetch(`${server.base}/api/auth/login`, {
       method: "POST",

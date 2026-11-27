@@ -1,6 +1,7 @@
 import { log } from "./logger.js";
 import { safeFetch } from "./security.js";
 import { AppError } from "./errors.js";
+import { connectivity, isOfflineError } from "./connectivity.js";
 
 /**
  * Guards outgoing calls to third-party addons. The circuit breaker is the point of
@@ -62,7 +63,7 @@ export function metadataConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gua
 export type BreakerState = "closed" | "open" | "half-open";
 
 export type OutboundCode = "timeout" | "abort" | "network" | "invalid-json" | "too-large"
-  | "cancelled" | "queue-full" | `http-${number}`;
+  | "cancelled" | "queue-full" | "offline" | `http-${number}`;
 
 export class OutboundError extends Error {
   constructor(readonly code: OutboundCode) {
@@ -72,6 +73,7 @@ export class OutboundError extends Error {
 }
 
 export function reasonCategory(error: unknown): OutboundCode {
+  if (isOfflineError(error)) return "offline";
   if (error instanceof OutboundError) return error.code;
   if (error instanceof Error && error.name === "TimeoutError") return "timeout";
   if (error instanceof Error && error.name === "AbortError") return "abort";
@@ -99,6 +101,7 @@ interface HostState {
   trialInFlight: boolean;
   rejected: number;
   opened: number;
+  openedAt: number;
 }
 
 const seconds = (ms: number) => Math.max(1, Math.round(ms / 1000));
@@ -168,7 +171,7 @@ export class OutboundGuard {
       entry = {
         active: 0, queue: [], lastKey: "", lastStartedAt: 0, touchedAt: this.now(),
         state: "closed", failures: 0, openUntil: 0, cooldownMs: this.config.cooldownMs,
-        trialInFlight: false, rejected: 0, opened: 0,
+        trialInFlight: false, rejected: 0, opened: 0, openedAt: 0,
       };
       this.hosts.set(host, entry);
     }
@@ -304,6 +307,7 @@ export class OutboundGuard {
     entry.state = "open";
     entry.openUntil = this.now() + pause;
     entry.opened += 1;
+    entry.openedAt = this.now();
     log("WARN", "Circuit breaker opened for the host", { host, failures: entry.failures, pauseSeconds: seconds(pause), reason });
   }
 
@@ -330,6 +334,10 @@ export class OutboundGuard {
       }
       return response;
     } catch (error) {
+      if (isOfflineError(error)) {
+        entry.trialInFlight = false;
+        throw error;
+      }
       // A deadline we set ourselves says nothing about the provider. The call still fails
       // and the caller still copes; it just must not count towards opening the breaker.
       if (this.config.countTimeoutsAsFailure || !isOwnTimeout(error)) {
@@ -369,6 +377,10 @@ export class OutboundGuard {
       if (entry) this.succeed(host, entry);
     };
     const failed = (error: unknown): never => {
+      if (isOfflineError(error)) {
+        if (entry) entry.trialInFlight = false;
+        throw error;
+      }
       if (options.signal?.aborted) {
         if (entry) entry.trialInFlight = false;
         throw new OutboundError("cancelled");
@@ -493,6 +505,10 @@ export class OutboundGuard {
       : AbortSignal.timeout(options.deadlineMs);
     let statusFailure = false;
     const failed = (error: unknown): never => {
+      if (isOfflineError(error)) {
+        if (entry) entry.trialInFlight = false;
+        throw error;
+      }
       if (options.signal?.aborted) {
         if (entry) entry.trialInFlight = false;
         throw new OutboundError("cancelled");
@@ -552,11 +568,29 @@ export class OutboundGuard {
         opensInSeconds: entry.state === "open" ? seconds(entry.openUntil - now) : undefined,
       }));
   }
+
+  /** Closes the breakers the outage opened; a host that was dead before it stays out. */
+  closeAfterOutage(since: number): void {
+    for (const entry of this.hosts.values()) {
+      if (entry.state !== "open" && entry.state !== "half-open") continue;
+      if (entry.openedAt < since) continue;
+      entry.state = "closed";
+      entry.failures = 0;
+      entry.cooldownMs = this.config.cooldownMs;
+      entry.openUntil = 0;
+      entry.trialInFlight = false;
+    }
+  }
 }
 
 export const outbound = new OutboundGuard();
 
 export const metadataOutbound = new OutboundGuard(metadataConfigFromEnv());
+
+connectivity.onOnline((since) => {
+  outbound.closeAfterOutage(since);
+  metadataOutbound.closeAfterOutage(since);
+});
 
 const hostOf = (raw: string): string | undefined => {
   try { return new URL(raw.replace(/^stremio:\/\//i, "https://")).hostname.toLowerCase(); }

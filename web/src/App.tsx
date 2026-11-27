@@ -371,6 +371,7 @@ export function App() {
   const [switcherTarget, setSwitcherTarget] = useState<string | undefined>();
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const [internet, setInternet] = useState<{ status: "online" | "offline"; offlineSince?: string }>({ status: "online" });
   const restricted = buildInfo?.restricted === true;
   const child = session?.child === true;
   const childCatalogue = child && session?.catalogue === true;
@@ -1563,7 +1564,39 @@ export function App() {
   const admin = session?.role === "admin";
   const buildInfoRequest = useRef<Promise<BuildInfo | null> | null>(null);
   const loadBuildInfo = () => buildInfoRequest.current ??= api.status().catch(() => null);
-  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); }); }, []);
+  const applyInternet = (info: Pick<BuildInfo, "internet" | "offlineSince">) => {
+    const status = info.internet === "offline" ? "offline" as const : "online" as const;
+    const offlineSince = status === "offline" ? info.offlineSince : undefined;
+    setInternet((current) => {
+      if (current.status === status && current.offlineSince === offlineSince) return current;
+      return status === "offline" ? { status, ...(offlineSince ? { offlineSince } : {}) } : { status: "online" };
+    });
+  };
+  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); if (info) applyInternet(info); }); }, []);
+  useEffect(() => {
+    let timer: number | undefined;
+    let stopped = false;
+    const clear = () => { if (timer !== undefined) { window.clearTimeout(timer); timer = undefined; } };
+    const interval = internet.status === "offline" ? 10_000 : 30_000;
+    const tick = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      try {
+        const info = await api.status();
+        if (!stopped) applyInternet(info);
+      } catch { /* keep the last known internet state */ }
+      if (stopped || document.visibilityState !== "visible") return;
+      // A visibility change during the request may have scheduled its own timer already.
+      clear();
+      timer = window.setTimeout(() => { void tick(); }, interval);
+    };
+    const onVisibility = () => {
+      clear();
+      if (document.visibilityState === "visible") timer = window.setTimeout(() => { void tick(); }, interval);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    if (document.visibilityState === "visible") timer = window.setTimeout(() => { void tick(); }, interval);
+    return () => { stopped = true; clear(); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [internet.status]);
   useEffect(() => {
     if (!buildInfo?.searchEverywhere) return;
     const onKey = (event: KeyboardEvent) => {
@@ -2168,7 +2201,7 @@ export function App() {
       .catch(() => undefined);
     return () => controller.abort();
   }, [fileSubtitleKey]);
-  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }, shufflePlay = false) => {
+  const playLocal = async (title: string, path: string, poster?: string, episode = false, anchor?: PlaybackAnchor, fromBeginning = false, identity?: { type: "movie" | "series"; id: string }, session?: { key: string; panel?: boolean }, shufflePlay = false, startAt?: number) => {
     if (!shufflePlay) endShuffle();
     // A file of the library plays as itself: the catalogue identity of whatever was open before
     // never travels with it. A caller that already knows the binding hands it over; otherwise the
@@ -2186,7 +2219,7 @@ export function App() {
       // A play the catalogue detail started runs under that title; a file of the library runs
       // under itself, and the header keeps naming it however the sources are switched.
       setPlayerSubject({ title, ...(poster ? { poster } : {}), episode, path, ...(session ? { key: session.key, ...(session.panel ? { panel: true } : {}) } : {}) });
-      setStartAtSeconds(undefined);
+      setStartAtSeconds(startAt);
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalEpisode(episode);
@@ -3020,7 +3053,7 @@ export function App() {
       return;
     }
     if (card.kind !== "resume-catalogue") return;
-    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}) } }),
+    openCatalogueDetail({ type: card.type, id: card.id, name: card.name, ...(card.poster ? { poster: card.poster } : {}), ...(!autoplay || card.path || card.pending ? {} : { resume: { ...(resumeKeyOf(card.key) ? { stableKey: resumeKeyOf(card.key)! } : {}), ...(card.progress ? { position: card.progress.position } : {}) } }),
       ...(card.season != null && card.episode != null ? { season: card.season, episode: card.episode } : {}) });
   };
   const homeShowAll = (target: ShowAllTarget) => {
@@ -3089,6 +3122,11 @@ export function App() {
     const entry = resume.find((candidate) => candidate.key === `${detailRead.target.type}:${catalogueStreamId(detailRead.target)}`);
     return entry ? { position: entry.position, duration: entry.duration, sourceKey: sourceIdentity(detailSource) } : undefined;
   }, [detailRead, detailSource, resume]);
+  /** Where Continue watching left the shared detail's title, whichever source it played from. */
+  const detailResumePosition = useMemo(() => {
+    if (!catalogueDetail?.resume) return undefined;
+    return resume.find((candidate) => candidate.key === `${catalogueDetail.type}:${catalogueStreamId(catalogueDetail)}`)?.position;
+  }, [catalogueDetail, resume]);
   /** The source the shared detail's title was last played from, so its row is preselected. */
   const detailResumeStableKey = useMemo(() => {
     if (!detailRead) return undefined;
@@ -3430,12 +3468,12 @@ export function App() {
   /** Plays the row the shared detail selected: a file the account owns plays as itself, and every
    *  other row travels under the detail's own title and episode. The browse panel's selection --
    *  the title it shows, the episode and source it picked -- is never moved by it. */
-  const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean) => {
+  const playCatalogueDetail = (stream: Stream, target: CatalogueDetailTarget, fromBeginning: boolean, startAt?: number) => {
     endShuffle();
     const anchor = { kind: "catalog" as const, key: `${target.type}:${target.id}` };
     if (isLocalStream(stream) && stream.localPath) {
       setDetailPlaying(null);
-      void playLocal(detailPlaybackTitle(target), stream.localPath, target.poster, target.season != null, anchor, fromBeginning);
+      void playLocal(detailPlaybackTitle(target), stream.localPath, target.poster, target.season != null, anchor, fromBeginning, undefined, undefined, false, startAt);
       return;
     }
     // A library file of the previous playback is not what is playing now, and its title, poster
@@ -3714,7 +3752,9 @@ export function App() {
   return <ChildModeProvider child={child} catalogue={childCatalogue}>
   <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}{internet.status === "offline"
+        ? <div className="online offline" title={t("app.serverNoInternetHint")} role="status"><i/> {t("app.serverNoInternet")}</div>
+        : <div className="online"><i/> {t("app.serverOnline")}</div>}
       <AccountMenu session={session!} onSwitchTo={(id) => { setSwitcherTarget(id); setSwitcherOpen(true); }} {...(!restricted ? { onChangeAvatar: () => setAvatarPickerOpen(true) } : {})} {...(child ? {} : { onSettings: () => openView("settings") })} onSignOut={() => void signOut()}/>
       </div></header>
     <aside className={`sidebar${child ? " sidebar-child" : ""}`}><nav>
@@ -3818,6 +3858,8 @@ export function App() {
             // and the way to say that episode is seen -- which is that position going away.
             {...(detailProgress ? { watched: true, watchedLabel: t("mediaServer.markWatched"), onToggleWatched: () => void clearDetailProgress() } : {})}
             onPlay={playCatalogueDetail}
+            offline={internet.status === "offline"}
+            {...(detailResumePosition !== undefined ? { resumePosition: detailResumePosition } : {})}
             onSaveToLibrary={(stream, effective) => void queueCatalogueStream(effective, stream)}
             onSaveElsewhere={(stream, effective) => openCatalogueDownload(effective, stream, detailSourcePicked)}
             {...(bulkDownloadAllowed ? { onBulkDownload: setSeriesBulk } : {})}

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { AppError } from "./errors.js";
+import { OfflineError } from "./connectivity.js";
 import { flushLog, initLogger } from "./logger.js";
 import {
   GuardRejection,
@@ -118,6 +119,48 @@ test("a plain error still opens that guard", async () => {
   const { guard } = harness({ countTimeoutsAsFailure: false });
   for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("wikidata.test", boom));
   await assert.rejects(guard.run("wikidata.test", reply(200)), GuardRejection);
+});
+
+test("an offline failure from run does not count towards the breaker", async () => {
+  const { guard } = harness({ failureThreshold: 1 });
+  await assert.rejects(guard.run("addon.test", async () => { throw new OfflineError(); }), OfflineError);
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("an offline failure from runJson does not count towards the breaker", async () => {
+  const { guard } = harness({ failureThreshold: 1 });
+  await assert.rejects(guard.runJson("addon.test", async () => { throw new OfflineError(); }, {
+    deadlineMs: 5_000,
+    maxBytes: 1024,
+  }), OfflineError);
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("an offline failure from runBody does not count towards the breaker", async () => {
+  const { guard } = harness({ failureThreshold: 1 });
+  await assert.rejects(guard.runBody("addon.test", async () => { throw new OfflineError(); }, async () => null, {
+    deadlineMs: 5_000,
+  }), OfflineError);
+  assert.deepEqual(guard.diagnostics(), []);
+});
+
+test("closing breakers after an outage returns open hosts to service", async () => {
+  const { guard } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
+  assert.equal(guard.diagnostics()[0]?.state, "open");
+
+  guard.closeAfterOutage(0);
+  assert.deepEqual(guard.diagnostics(), []);
+  assert.equal((await guard.run("addon.test", reply(200))).status, 200);
+});
+
+test("a breaker opened before the outage stays open when the connection returns", async () => {
+  const { guard, advance } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("dead.test", boom));
+  advance(1_000);
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("outage.test", boom));
+  guard.closeAfterOutage(1_000_500);
+  assert.deepEqual(guard.diagnostics().map((entry) => [entry.host, entry.state]), [["dead.test", "open"]]);
 });
 
 test("a 429 still opens that guard, and Retry-After decides the pause", async () => {

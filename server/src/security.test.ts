@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
-import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, restoreAddonHosts, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { connectivity, OfflineError, isOfflineError, resetConnectivityForTests } from "./connectivity.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -49,6 +50,130 @@ const withEnv = (t: TestContext, name: string, value: string) => {
   process.env[name] = value;
   t.after(() => { delete process.env[name]; });
 };
+
+test("a public host fails immediately once the resolver is known to be unreachable", async () => {
+  resetConnectivityForTests();
+  let calls = 0;
+  setDnsLookup((_hostname, _options, callback) => {
+    calls += 1;
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 100);
+  });
+  try {
+    await assert.rejects(safeFetch("https://one.test/"));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const before = calls;
+
+    const started = performance.now();
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => error instanceof OfflineError);
+    assert.ok(performance.now() - started < 50, "the refused lookup did not reach the delayed resolver");
+    assert.equal(calls, before);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
+test("ALLOW_PRIVATE_ADDONS keeps outage detection for public names and lets home names through", async (t) => {
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((hostname, _options, callback) => {
+    asked.push(hostname);
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 20);
+  });
+  try {
+    await assert.rejects(safeFetch("https://one.test/"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    asked.length = 0;
+
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => isOfflineError(error));
+    assert.deepEqual(asked, [], "a public name is refused without asking the resolver");
+    await assert.rejects(safeFetch("https://nas.local/"), (error: unknown) => !isOfflineError(error));
+    assert.deepEqual(asked, ["nas.local"], "a home name still goes to the resolver");
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
+test("an addon on the owner's own domain keeps working offline, and its home answer proves nothing", async (t) => {
+  // Closed after each reply, so every request looks the name up again.
+  const server = await loopbackServer((_path, response) => { response.writeHead(200, { "content-type": "text/plain", connection: "close" }); response.end("ok"); });
+  t.after(server.close);
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((hostname, options, callback) => {
+    asked.push(hostname);
+    if (hostname === "addon.mydomain.test") {
+      if (options.all) callback(null, [{ address: "127.0.0.1", family: 4 }]);
+      else callback(null, "127.0.0.1", 4);
+      return;
+    }
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 20);
+  });
+  try {
+    assert.equal((await safeFetch(`http://addon.mydomain.test:${server.port}/manifest.json`)).status, 200);
+    // The home answer must not become the host that cross-checks an outage.
+    await assert.rejects(safeFetch("https://one.test/"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    asked.length = 0;
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => isOfflineError(error));
+    assert.deepEqual(asked, [], "the server is offline for public names");
+
+    assert.equal((await safeFetch(`http://addon.mydomain.test:${server.port}/manifest.json`)).status, 200);
+    assert.deepEqual(asked, ["addon.mydomain.test"]);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
+test("an installed split-DNS addon is reachable on its first request after an offline restart", async (t) => {
+  const server = await loopbackServer((_path, response) => response.end("ok"));
+  t.after(server.close);
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((host, options, callback) => {
+    asked.push(host);
+    if (host === "api.themoviedb.org") {
+      callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" }));
+      return;
+    }
+    const address = host === "addon.example.org" ? "127.0.0.1" : "93.184.216.34";
+    if (options.all) callback(null, [{ address, family: 4 }]);
+    else callback(null, address, 4);
+  });
+  t.after(() => { setDnsLookup(); resetConnectivityForTests(); });
+  const manifest = `http://addon.example.org:${server.port}/manifest.json`;
+  restoreAddonHosts([manifest, "https://public.example/manifest.json"]);
+  connectivity.recordLookupFailure("failed.example", "EAI_AGAIN");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(connectivity.state, "offline");
+  assert.equal(await (await safeFetch(manifest)).text(), "ok");
+  await assert.rejects(safeFetch("https://public.example"), isOfflineError);
+  await assert.rejects(safeFetch("https://public.example"), isOfflineError);
+  assert.equal(asked.filter((host) => host === "public.example").length, 1);
+  assert.equal(connectivity.state, "offline");
+});
+
+test("names that do not exist never switch the server offline", async () => {
+  resetConnectivityForTests();
+  setDnsLookup((hostname, _options, callback) => {
+    if (hostname === "good.test") callback(null, [{ address: "93.184.216.34", family: 4 }]);
+    else callback(Object.assign(new Error("no such name"), { code: "ENOTFOUND" }));
+  });
+  try {
+    for (const host of ["gone.test", "typo.test", "dead.test", "old.test"]) {
+      await assert.rejects(validateRemoteUrl(`https://${host}/`), (error: unknown) => !(error instanceof OfflineError));
+    }
+    assert.equal((await validateRemoteUrl("https://good.test/")).hostname, "good.test");
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
 
 test("a name that rebinds between the check and the connection is refused without a request", async (t) => {
   const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });

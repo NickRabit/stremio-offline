@@ -291,7 +291,7 @@ const carries = (value: unknown) =>
 /** Everything `base` does not carry, taken from `extra`. Naming the fields instead would
  *  quietly drop every other one an addon answers with -- the IMDb rating, the cast, the
  *  logo -- which is what happened while this listed eight of them by hand. */
-function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
+export function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
   const filled: MetaItem = { ...base };
   for (const [key, value] of Object.entries(extra)) if (!carries(filled[key]) && carries(value)) filled[key] = value;
   return filled;
