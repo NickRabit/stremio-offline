@@ -28,7 +28,7 @@ import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, publicAddonRestricted } from "./security.js";
+import { publicAddon, publicAddonRestricted, restoreAddonHosts } from "./security.js";
 import { withProxiedArtwork } from "./addon-view.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
@@ -229,6 +229,7 @@ try {
   throw error;
 }
 await store.load();
+restoreAddonHosts(store.addons().map((addon) => addon.manifestUrl));
 reportProgress();
 await mediaServers.initialize();
 reportProgress();

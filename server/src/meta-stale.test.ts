@@ -42,15 +42,15 @@ test("unchanged metadata is not written and changed metadata is written once", a
   const database = await databaseFixture(t);
   const initial = new StaleMetaStore();
   initial.attachDatabase(database);
-  await initial.remember("movie:tt1", film("First"));
+  await initial.keep("movie:tt1", film("First"));
 
   const observed = observedWrites(database);
   const restarted = new StaleMetaStore();
   restarted.attachDatabase(observed.database);
-  await restarted.remember("movie:tt1", film("First"));
+  await restarted.keep("movie:tt1", film("First"));
   assert.deepEqual(observed.writes, []);
 
-  await restarted.remember("movie:tt1", film("Second"));
+  await restarted.keep("movie:tt1", film("Second"));
   assert.deepEqual(observed.writes, ["run"]);
 });
 
@@ -58,7 +58,7 @@ test("metadata survives a new store instance over the same database", async (t) 
   const database = await databaseFixture(t);
   const first = new StaleMetaStore();
   first.attachDatabase(database);
-  await first.remember("series:tt1:artwork", film("Remembered"));
+  await first.keep("series:tt1:artwork", film("Remembered"));
 
   const restarted = new StaleMetaStore();
   restarted.attachDatabase(database);
@@ -74,7 +74,7 @@ test("pruning keeps the newest 5 000 metadata rows", async (t) => {
 
   const store = new StaleMetaStore(() => 10_000);
   store.attachDatabase(database);
-  await store.remember("newest", film("Newest"));
+  await store.keep("newest", film("Newest"));
 
   assert.equal((await database.get<{ count: number }>("SELECT count(*) AS count FROM meta_stale"))?.count, 5_000);
   assert.equal(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["old-0"]), undefined);
@@ -86,17 +86,17 @@ test("a key the cap pruned is written again the next time it is remembered", asy
   let now = 1;
   const store = new StaleMetaStore(() => now);
   store.attachDatabase(database);
-  await store.remember("k0", film("Kept in memory"));
+  await store.keep("k0", film("Kept in memory"));
   now = 2;
   await database.batch(Array.from({ length: 5_000 }, (_, index) => ({
     sql: "INSERT INTO meta_stale (key, data, at) VALUES (?, ?, ?)",
     params: [`later-${index}`, JSON.stringify(film(`Later ${index}`)), 10 + index],
   })));
   now = 2 + 60 * 60_000;
-  await store.remember("newest", film("Newest"));
+  await store.keep("newest", film("Newest"));
   assert.equal(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["k0"]), undefined);
 
-  await store.remember("k0", film("Kept in memory"));
+  await store.keep("k0", film("Kept in memory"));
   assert.ok(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["k0"]));
 });
 
@@ -105,14 +105,12 @@ test("a partial reading is completed from the kept copy and never strips it", as
   store.attachDatabase(await databaseFixture(t));
   const full: MetaItem = { ...film("Film"), description: "Plot", cast: ["A", "B"] };
   assert.deepEqual(await store.keep("movie:tt1", full, false), full);
-  await store.remember("movie:tt1", full);
 
   const partial: MetaItem = { ...film("Film"), year: 1999 };
   const shown = await store.keep("movie:tt1", partial, true);
   assert.equal(shown.description, "Plot");
   assert.deepEqual(shown.cast, ["A", "B"]);
   assert.equal(shown.year, 1999);
-  await store.remember("movie:tt1", shown);
   const kept = await store.get("movie:tt1");
   assert.equal(kept?.description, "Plot");
   assert.deepEqual(kept?.cast, ["A", "B"]);
@@ -123,6 +121,15 @@ test("the first usable reading is kept even when a provider failed", async (t) =
   store.attachDatabase(await databaseFixture(t));
   const reading: MetaItem = { ...film("Film"), description: "Plot" };
   assert.deepEqual(await store.keep("movie:tt1", reading, true), reading);
-  await store.remember("movie:tt1", reading);
   assert.equal((await store.get("movie:tt1"))?.description, "Plot");
+});
+
+test("overlapping readings merge after the preceding write for the same title", async (t) => {
+  const store = new StaleMetaStore();
+  store.attachDatabase(await databaseFixture(t));
+  const full = { ...film("Film"), description: "Plot" };
+  const partial = { ...film("Film"), year: 1999 };
+  const [, shown] = await Promise.all([store.keep("film", full), store.keep("film", partial, true)]);
+  assert.deepEqual(shown, { ...full, year: 1999 });
+  assert.deepEqual(await store.get("film"), shown);
 });

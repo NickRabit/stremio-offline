@@ -1048,11 +1048,7 @@ export async function tmdbMeta(type: string, id: string, config: TmdbConfig, fet
   }
   const { response } = reply;
   throwIfCancelled(signal);
-  if (response.status === 401) {
-    log("WARN", "TMDB request failed", { operation: "meta", type, id, status: response.status });
-    if (outcome) outcome.failed = true;
-    return null;
-  }
+  if (response.status === 404) return null;
   if (!response.ok) {
     log("WARN", "TMDB request failed", { operation: "meta", type, id, status: response.status });
     if (outcome) outcome.failed = true;

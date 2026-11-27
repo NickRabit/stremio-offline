@@ -75,6 +75,7 @@ let dnsLookup: DnsLookup = systemLookup;
 export function setDnsLookup(lookup?: DnsLookup): void {
   dnsLookup = lookup ?? systemLookup;
   homeAnswered.clear();
+  unclassifiedAddonHosts.clear();
 }
 
 /** A name the home network answers for: one listed in ALLOW_ADDON_HOSTS, a single label, or a
@@ -83,6 +84,15 @@ const HOME_SUFFIXES = [".local", ".lan", ".home", ".internal", ".home.arpa", ".l
 /** Names that answered with a home address while private addresses are allowed: an addon on the
  *  owner's own domain behind split DNS. The router answers them without the internet. */
 const homeAnswered = new Set<string>();
+const unclassifiedAddonHosts = new Set<string>();
+
+export function restoreAddonHosts(manifestUrls: string[]): void {
+  for (const manifestUrl of manifestUrls) {
+    const url = URL.parse(manifestUrl);
+    if (url) unclassifiedAddonHosts.add(url.hostname.toLowerCase());
+  }
+}
+
 const answerAddresses = (address: string | LookupAddress[] | undefined): string[] =>
   Array.isArray(address) ? address.map((answer) => answer.address) : address ? [address] : [];
 const homeNetworkName = (host: string): boolean =>
@@ -104,18 +114,24 @@ const checkedAndRecordedLookup: DnsLookup = (hostname, options, callback) => {
     dnsLookup(hostname, options, callback);
     return;
   }
-  if (!connectivity.admitLookup(hostname)) {
+  const admitted = connectivity.admitLookup(hostname);
+  // After restart, allow one DNS lookup to identify an installed split-DNS addon.
+  const discoverHome = !admitted && process.env.ALLOW_PRIVATE_ADDONS === "1" && unclassifiedAddonHosts.delete(host);
+  if (!admitted && !discoverHome) {
     callback(new OfflineError());
     return;
   }
   dnsLookup(hostname, options, (error, address, answerFamily) => {
-    if (error) {
+    if (!error) unclassifiedAddonHosts.delete(host);
+    if (!error && privateAddressAllowed(host) && answerAddresses(address).some((answer) => privateReason(answer))) {
+      homeAnswered.add(host);
+      if (admitted) connectivity.releaseLookup();
+    } else if (!admitted) {
+      callback(new OfflineError());
+      return;
+    } else if (error) {
       const code = (error as NodeJS.ErrnoException).code;
       connectivity.recordLookupFailure(hostname, code);
-    } else if (privateAddressAllowed(host) && answerAddresses(address).some((answer) => privateReason(answer))) {
-      // A home answer proves only that the router is up, never that the internet is.
-      homeAnswered.add(host);
-      connectivity.releaseLookup();
     } else {
       connectivity.recordLookupSuccess(hostname);
     }

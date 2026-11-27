@@ -11,7 +11,7 @@ const hash = (json: string): string => createHash("sha1").update(json).digest("h
 export class StaleMetaStore {
   private database: AppDatabase | undefined;
   private hashes = new Map<string, string>();
-  private pending = new Map<string, Promise<void>>();
+  private pending = new Map<string, Promise<MetaItem>>();
   private lastPrunedAt: number | undefined;
 
   constructor(private now: () => number = Date.now) {}
@@ -37,20 +37,22 @@ export class StaleMetaStore {
   /** Keeps a fresh detail reading for offline use and returns what the detail should show. A
    *  partial reading (a provider failed) is completed from the kept copy first, so the copy never
    *  loses a field, and the first usable reading is kept even when some provider failed. */
-  async keep(key: string, value: MetaItem, partial: boolean): Promise<MetaItem> {
-    const kept = partial ? await this.get(key).catch(() => null) : null;
-    const full = kept ? fillMissingMeta(value, kept) : value;
-    void this.remember(key, full).catch(() => undefined);
-    return full;
-  }
-
-  remember(key: string, value: MetaItem): Promise<void> {
-    const previous = this.pending.get(key) ?? Promise.resolve();
-    const work = previous.catch(() => undefined).then(() => this.rememberChanged(key, value));
-    const tail = work.catch(() => undefined).finally(() => {
-      if (this.pending.get(key) === tail) this.pending.delete(key);
+  keep(key: string, value: MetaItem, partial = false): Promise<MetaItem> {
+    const previous = this.pending.get(key);
+    const work = Promise.resolve(previous).then(async () => {
+      let full = value;
+      try {
+        const kept = partial ? await this.get(key) : null;
+        if (kept) full = fillMissingMeta(value, kept);
+        await this.rememberChanged(key, full);
+      } catch {
+        // The live detail is still usable if the offline store is unavailable.
+      }
+      return full;
+    }).finally(() => {
+      if (this.pending.get(key) === work) this.pending.delete(key);
     });
-    this.pending.set(key, tail);
+    this.pending.set(key, work);
     return work;
   }
 

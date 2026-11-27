@@ -97,6 +97,13 @@ test("a TMDB failure is marked on the outcome, an unknown title is not", async (
   assert.equal(unknown.failed, false);
 });
 
+test("a missing direct TMDB detail is a clean miss", async () => {
+  const outcome = { failed: false };
+  const missing = await tmdbMeta("movie", "tmdb:123", config, async () => new Response(null, { status: 404 }), undefined, outcome);
+  assert.equal(missing, null);
+  assert.equal(outcome.failed, false);
+});
+
 test("a movie by IMDb id is resolved and mapped to Czech", async () => {
   clearTmdbCache();
   const calls: string[] = [];

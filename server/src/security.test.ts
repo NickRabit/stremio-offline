@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
-import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
-import { OfflineError, isOfflineError, resetConnectivityForTests } from "./connectivity.js";
+import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, restoreAddonHosts, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { connectivity, OfflineError, isOfflineError, resetConnectivityForTests } from "./connectivity.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -127,6 +127,35 @@ test("an addon on the owner's own domain keeps working offline, and its home ans
     setDnsLookup();
     resetConnectivityForTests();
   }
+});
+
+test("an installed split-DNS addon is reachable on its first request after an offline restart", async (t) => {
+  const server = await loopbackServer((_path, response) => response.end("ok"));
+  t.after(server.close);
+  withEnv(t, "ALLOW_PRIVATE_ADDONS", "1");
+  resetConnectivityForTests();
+  const asked: string[] = [];
+  setDnsLookup((host, options, callback) => {
+    asked.push(host);
+    if (host === "api.themoviedb.org") {
+      callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" }));
+      return;
+    }
+    const address = host === "addon.example.org" ? "127.0.0.1" : "93.184.216.34";
+    if (options.all) callback(null, [{ address, family: 4 }]);
+    else callback(null, address, 4);
+  });
+  t.after(() => { setDnsLookup(); resetConnectivityForTests(); });
+  const manifest = `http://addon.example.org:${server.port}/manifest.json`;
+  restoreAddonHosts([manifest, "https://public.example/manifest.json"]);
+  connectivity.recordLookupFailure("failed.example", "EAI_AGAIN");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(connectivity.state, "offline");
+  assert.equal(await (await safeFetch(manifest)).text(), "ok");
+  await assert.rejects(safeFetch("https://public.example"), isOfflineError);
+  await assert.rejects(safeFetch("https://public.example"), isOfflineError);
+  assert.equal(asked.filter((host) => host === "public.example").length, 1);
+  assert.equal(connectivity.state, "offline");
 });
 
 test("names that do not exist never switch the server offline", async () => {
