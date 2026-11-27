@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { CatalogueTitleDetail, catalogueStreamId, type CatalogueDetailTarget, type CatalogueTitleDetailProps } from "./CatalogueTitleDetail";
 import { ChildModeProvider } from "./child-mode";
-import { setLocale } from "./i18n";
+import { setLocale, t } from "./i18n";
 import { clearTitleExtras } from "./title-extras";
 import { clearTitleEnrichment } from "./title-enrichment";
 import type { Meta, RemoteLibrary, SourceRuleVerdict, Stream, Video } from "./types";
@@ -184,6 +184,14 @@ describe("CatalogueTitleDetail metadata", () => {
     expect(host.querySelector(".library-detail-synopsis")!.textContent).toBe("A quiet film.");
   });
 
+  it("shows the translated offline text when metadata fails with err.offline", async () => {
+    metaReply = () => json({ error: "The server has no internet connection right now. Only local files can be played.", messageKey: "err.offline" }, 503);
+    await render();
+    const error = host.querySelector(".remote-error")!;
+    expect(error.textContent).toContain(t("err.offline"));
+    expect(error.textContent).not.toContain(t("err.metaNotFound"));
+  });
+
   it("says so and offers the retry when the metadata read fails", async () => {
     metaReply = () => json({ error: "boom" }, 500);
     await render();
@@ -213,6 +221,41 @@ describe("CatalogueTitleDetail metadata", () => {
 });
 
 describe("CatalogueTitleDetail sources", () => {
+  it("enables Play from a local copy while an addon never settles", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+    expect(playButton().disabled).toBe(false);
+    expect(host.querySelector(".detail-tech")?.textContent).toContain("Film.mkv");
+    await click(playButton());
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
+  it("resumes a local copy while an addon never settles", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([{ ...local("Films/Film.mkv", "Film.mkv"), stableKey: "own:film" }]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "own:film" } } });
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ localPath: "Films/Film.mkv" }), expect.anything(), false);
+  });
+
+  it("does not resume an addon row before the addons answer", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    localReply = () => json([local("Films/Film.mkv", "Film.mkv")]);
+    streamReply = () => hung;
+    const { onPlay } = await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film(), resume: { stableKey: "addon:row" } } });
+    expect(onPlay).not.toHaveBeenCalled();
+  });
+
+  it("stays busy when there is no local copy and an addon has not answered", async () => {
+    const hung = new Promise<Response>(() => undefined);
+    streamReply = () => hung;
+    await render({ target: { type: "movie", id: "tt-film", name: "A film", initialMeta: film() } });
+    expect(playButton().disabled).toBe(true);
+    expect(host.querySelector(".detail-tech")).toBeNull();
+  });
+
   it("shows rows as providers answer and waits for all before the detail stops being pending", async () => {
     providerReply = () => json([{ key: "fast", name: "Fast" }, { key: "slow", name: "Slow" }]);
     const slow = deferred<Response>();

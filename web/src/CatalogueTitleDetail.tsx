@@ -14,6 +14,7 @@ import { useTitleExtras } from "./title-extras";
 import { useCatalogueStills } from "./title-enrichment";
 import { useLibrarySources } from "./library-sources";
 import { titleLanguage } from "./languages";
+import { sourceRowKey } from "./library-detail-sources";
 import { arrangeStreams, catalogSourceRows, compareRuleRank, isLocalStream, pickDefaultStream, resolveStreamSort, sortRuleId } from "./streams";
 import type { CatalogueBulkRequest, Meta, SourceProfile, Stream, Trailer, Video } from "./types";
 
@@ -139,6 +140,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const [chooserOpen, setChooserOpen] = useState(false);
   const [local, setLocal] = useState<Stream[]>([]);
   const resumed = useRef(false);
+  const heldDefault = useRef<Stream | null>(null);
 
   // The catalogue's snapshot is already the answer; a title that only Home or a favourite knows
   // reads its metadata here, and a failure says so with a retry instead of an empty detail.
@@ -156,6 +158,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   useEffect(() => {
     setPickedEpisode(null); setPickerOpen(false); setPickerSeason(null); setSourceError("");
     resumed.current = false;
+    heldDefault.current = null;
   }, [type, id]);
 
   const videos = snapshot?.videos ?? [];
@@ -288,9 +291,12 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   const offered = (stream: Stream) => showTorrents || stream.kind !== "torrent";
   const resolvedSort = resolveStreamSort(defaultSort, sourceProfiles);
   const ordered = useMemo(() => {
-    if (rows === null) return null;
-    const own = [...local, ...rows.filter(isLocalStream)]
+    const own = [...local, ...(rows ?? []).filter(isLocalStream)]
       .filter((stream, index, all) => all.findIndex((other) => (other.localPath ?? other.sourceId) === (stream.localPath ?? stream.sourceId)) === index);
+    if (rows === null) {
+      if (local.length === 0) return null;
+      return catalogSourceRows(own, [], "", resolvedSort);
+    }
     const addon = arrangeStreams(rows.filter((stream) => !isLocalStream(stream) && offered(stream)),
       { addon: "", language: "", sort: resolvedSort }, preferredLanguage ?? "", addonPriority, metaLanguage);
     return catalogSourceRows(own, addon, "", resolvedSort);
@@ -339,6 +345,16 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   );
   /** The first playable row the active rule accepts, then the first unverified row. */
   const firstPlayable = pickDefaultStream(detailSources ?? [], sortRuleId(resolvedSort)) ?? null;
+  const heldScope = useRef(streamId);
+  if (heldScope.current !== streamId) {
+    heldScope.current = streamId;
+    heldDefault.current = null;
+  }
+  if (rows === null && firstPlayable) heldDefault.current ??= firstPlayable;
+  const held = heldDefault.current;
+  const heldStill = Boolean(held && detailSources?.some((stream) => sourceRowKey(stream) === sourceRowKey(held)));
+  if (!heldStill && rows !== null) heldDefault.current = null;
+  const defaultRow = heldStill && held ? held : firstPlayable;
 
   // What this detail holds is the caller's business too: its chips, its saved position and the
   // episode after the one it plays all belong to the title read here.
@@ -355,9 +371,11 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
   // Continue watching plays once, the first time the rows are known: an addon that renames or
   // resizes the row it answered with must not leave the card that asked to play doing nothing.
   useEffect(() => {
-    if (!target.resume || resumed.current || rows === null) return;
+    if (!target.resume || resumed.current) return;
     const key = target.resume.stableKey;
     const keyed = key ? ordered?.find((stream) => stream.playable && stream.stableKey === key) : undefined;
+    // The resumed copy found among the local rows plays without waiting for the addons.
+    if (rows === null && !keyed) return;
     if (!keyed && pendingProviders > 0) return;
     resumed.current = true;
     const pick = keyed ?? firstPlayable;
@@ -466,7 +484,7 @@ export function CatalogueTitleDetail(props: CatalogueTitleDetailProps) {
       sources={detailSources}
       keepOrder
       {...(addonPriority ? { addonPriority } : {})}
-      defaultSources={firstPlayable ? [firstPlayable] : []}
+      defaultSources={defaultRow ? [defaultRow] : []}
       {...(seed ? { initialSource: seed } : {})}
       episodes={episodePicker}
       {...(waitingEpisode || pendingProviders > 0 ? { placeholder: null } : {})}

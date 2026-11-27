@@ -371,6 +371,7 @@ export function App() {
   const [switcherTarget, setSwitcherTarget] = useState<string | undefined>();
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  const [internet, setInternet] = useState<{ status: "online" | "offline"; offlineSince?: string }>({ status: "online" });
   const restricted = buildInfo?.restricted === true;
   const child = session?.child === true;
   const childCatalogue = child && session?.catalogue === true;
@@ -1563,7 +1564,37 @@ export function App() {
   const admin = session?.role === "admin";
   const buildInfoRequest = useRef<Promise<BuildInfo | null> | null>(null);
   const loadBuildInfo = () => buildInfoRequest.current ??= api.status().catch(() => null);
-  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); }); }, []);
+  const applyInternet = (info: Pick<BuildInfo, "internet" | "offlineSince">) => {
+    const status = info.internet === "offline" ? "offline" as const : "online" as const;
+    const offlineSince = status === "offline" ? info.offlineSince : undefined;
+    setInternet((current) => {
+      if (current.status === status && current.offlineSince === offlineSince) return current;
+      return status === "offline" ? { status, ...(offlineSince ? { offlineSince } : {}) } : { status: "online" };
+    });
+  };
+  useEffect(() => { void loadBuildInfo().then((info) => { setBuildInfo(info); setBuildKnown(true); if (info) applyInternet(info); }); }, []);
+  useEffect(() => {
+    let timer: number | undefined;
+    let stopped = false;
+    const clear = () => { if (timer !== undefined) { window.clearTimeout(timer); timer = undefined; } };
+    const interval = internet.status === "offline" ? 10_000 : 30_000;
+    const tick = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      try {
+        const info = await api.status();
+        if (!stopped) applyInternet(info);
+      } catch { /* keep the last known internet state */ }
+      if (stopped || document.visibilityState !== "visible") return;
+      timer = window.setTimeout(() => { void tick(); }, internet.status === "offline" ? 10_000 : 30_000);
+    };
+    const onVisibility = () => {
+      clear();
+      if (document.visibilityState === "visible") timer = window.setTimeout(() => { void tick(); }, interval);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    if (document.visibilityState === "visible") timer = window.setTimeout(() => { void tick(); }, interval);
+    return () => { stopped = true; clear(); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [internet.status]);
   useEffect(() => {
     if (!buildInfo?.searchEverywhere) return;
     const onKey = (event: KeyboardEvent) => {
@@ -3714,7 +3745,9 @@ export function App() {
   return <ChildModeProvider child={child} catalogue={childCatalogue}>
   <TitleExtrasActions.Provider value={{ searchPerson, openTitle: openRelatedTitle }}>
   <div className={`app-shell${tilesKnown ? "" : " tiles-pending"} tile-size-${settings.tileSize} catalog-shape-${settings.catalogTileShape} library-shape-${settings.libraryTileShape} home-shape-${settings.homeTileShape}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}<div className="online"><i/> {t("app.serverOnline")}</div>
+    <header className="topbar"><button className="brand brand-home" title={t(startHome ? "app.goToStart" : "app.goToCleanCatalog")} onClick={goToStart}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right">{restricted && <div className="restricted-chip">{t("restricted.chip")}</div>}{buildInfo?.searchEverywhere && <button className="topbar-search" aria-label={t("searchAll.open")} title={t("searchAll.open")} onClick={() => openSearch()}><Search/><span>{t("searchAll.open")}</span></button>}{internet.status === "offline"
+        ? <div className="online offline" title={t("app.serverNoInternetHint")} role="status"><i/> {t("app.serverNoInternet")}</div>
+        : <div className="online"><i/> {t("app.serverOnline")}</div>}
       <AccountMenu session={session!} onSwitchTo={(id) => { setSwitcherTarget(id); setSwitcherOpen(true); }} {...(!restricted ? { onChangeAvatar: () => setAvatarPickerOpen(true) } : {})} {...(child ? {} : { onSettings: () => openView("settings") })} onSignOut={() => void signOut()}/>
       </div></header>
     <aside className={`sidebar${child ? " sidebar-child" : ""}`}><nav>

@@ -62,6 +62,7 @@ const json = (body: unknown, status = 200) =>
 let root: Root;
 let host: HTMLDivElement;
 let consoleError: ReturnType<typeof vi.spyOn>;
+let statusBody: Record<string, unknown>;
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -71,6 +72,7 @@ beforeEach(() => {
   crash.home = false;
   crash.filters = false;
   settings.startView = "catalog";
+  statusBody = { status: "ok", version: "test", searchEverywhere: false };
   consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   vi.stubGlobal("matchMedia", () => ({
     matches: false, media: "", onchange: null,
@@ -82,7 +84,7 @@ beforeEach(() => {
   Element.prototype.scrollTo = () => undefined;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://test");
-    if (url.pathname === "/api/status") return json({ status: "ok", version: "test", searchEverywhere: false });
+    if (url.pathname === "/api/status") return json(statusBody);
     if (url.pathname === "/api/auth/me") return json({ username: "alice", role: "admin", language: "en", canSwitch: true });
     if (url.pathname === "/api/profiles") return json({ profiles: [{ id: "alice", username: "alice", unlock: "none", current: true }] });
     if (url.pathname === "/api/addons") return json([]);
@@ -179,5 +181,53 @@ describe("view boundaries in App", () => {
     expect(panel?.querySelector("[role=alert]")?.textContent).toContain(en["viewError.message"]);
     expect(panel?.querySelector("button.library-back")?.getAttribute("aria-label")).toBe(en["mediaServer.back"]);
     expect(panel?.querySelector(".browse-scroll [role=alert]")).not.toBeNull();
+  });
+});
+
+describe("header internet chip", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const waitForChip = async () => {
+    for (let step = 0; step < 80; step += 1) {
+      if (host.querySelector(".topbar .online")) return;
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+        else await new Promise((done) => setTimeout(done, 0));
+      });
+    }
+    expect(host.querySelector(".topbar .online"), "header chip").not.toBeNull();
+  };
+
+  it("shows No internet when status reports offline", async () => {
+    statusBody = { status: "ok", version: "test", searchEverywhere: false, internet: "offline" };
+    await act(async () => { root.render(<App/>); });
+    await waitForChip();
+    const chip = host.querySelector(".topbar .online")!;
+    expect(chip.classList.contains("offline")).toBe(true);
+    expect(chip.textContent).toContain(en["app.serverNoInternet"]);
+    expect(chip.getAttribute("title")).toBe(en["app.serverNoInternetHint"]);
+    expect(chip.getAttribute("role")).toBe("status");
+  });
+
+  it("returns to Server online after a later poll", async () => {
+    vi.useFakeTimers();
+    statusBody = { status: "ok", version: "test", searchEverywhere: false, internet: "offline" };
+    await act(async () => { root.render(<App/>); });
+    await waitForChip();
+    expect(host.querySelector(".topbar .online")!.textContent).toContain(en["app.serverNoInternet"]);
+    statusBody = { status: "ok", version: "test", searchEverywhere: false, internet: "online" };
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(host.querySelector(".topbar .online")!.textContent).toContain(en["app.serverOnline"]);
+    expect(host.querySelector(".topbar .online")!.classList.contains("offline")).toBe(false);
+  });
+
+  it("treats a missing internet field as online", async () => {
+    await act(async () => { root.render(<App/>); });
+    await waitForChip();
+    const chip = host.querySelector(".topbar .online")!;
+    expect(chip.classList.contains("offline")).toBe(false);
+    expect(chip.textContent).toContain(en["app.serverOnline"]);
   });
 });
