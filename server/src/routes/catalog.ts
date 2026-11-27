@@ -2,6 +2,7 @@ import type express from "express";
 import { readFile } from "node:fs/promises";
 import { allowedAddons, catalog, orderedForUser, orderFor, searchAll, searchableCatalogs, streamCandidates, streams, subtitleTarget, subtitles, type MetaProvider } from "../addons.js";
 import { CatalogPageCache } from "../catalog-page-cache.js";
+import { OfflineError, type Connectivity } from "../connectivity.js";
 import { DetailGalleryCache } from "../detail-gallery.js";
 import { AppError } from "../errors.js";
 import { ExternalIdStore, imdbOf, siteLinks } from "../external-ids.js";
@@ -63,6 +64,7 @@ export interface CatalogDeps extends RouteContext {
   ownRecord(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined;
   metaStore: LibraryMetaStore;
   externalIds: ExternalIdStore;
+  connectivity: Pick<Connectivity, "state">;
   debridReady?: (infoHash: string) => boolean;
   subtitleDelay(value: unknown): number;
   mediaSources: MediaServerSources;
@@ -78,7 +80,7 @@ const malformedPersonRequest = () =>
   new AppError("The request was not understood.", "err.invalidRequest", 400);
 
 export function registerCatalogRoutes(app: express.Application, deps: CatalogDeps): void {
-  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, nestedHidden, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, subtitleDelay, mediaSources, requireAccess } = deps;
+  const { store, currentUser, cachedMeta, prefsOf, libraryTarget, nestedHidden, ownerOf, trackMedia, libraryKey, localCopies, ownedTitles, localCopyFacts, libraryUnits, ownRecord, metaStore, externalIds, connectivity, subtitleDelay, mediaSources, requireAccess } = deps;
   const imageProxy = deps.imageProxy ?? images;
   const catalogPages = deps.catalogPages ?? new CatalogPageCache();
 
@@ -197,6 +199,7 @@ export function registerCatalogRoutes(app: express.Application, deps: CatalogDep
       if (disconnect.signal.aborted) return;
       if (!meta) {
         requireAccess(req);
+        if (connectivity.state === "offline") throw new OfflineError();
         throw new AppError("The metadata was not found.", "err.metaNotFound", 404);
       }
       if (gallery) {

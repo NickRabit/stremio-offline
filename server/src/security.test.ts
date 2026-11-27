@@ -3,6 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import test, { type TestContext } from "node:test";
 import { privateAddressRefusal, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, setDnsLookup, setFetchTransport, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { OfflineError, resetConnectivityForTests } from "./connectivity.js";
 import { defaultDownloadSettings } from "./naming.js";
 import type { AddonRecord } from "./types.js";
 
@@ -49,6 +50,28 @@ const withEnv = (t: TestContext, name: string, value: string) => {
   process.env[name] = value;
   t.after(() => { delete process.env[name]; });
 };
+
+test("a fourth public host fails immediately after three distinct lookup failures", async () => {
+  resetConnectivityForTests();
+  let calls = 0;
+  setDnsLookup((_hostname, _options, callback) => {
+    calls += 1;
+    setTimeout(() => callback(Object.assign(new Error("temporary DNS failure"), { code: "EAI_AGAIN" })), 100);
+  });
+  try {
+    const failed = ["one.test", "two.test", "three.test"].map((host) => safeFetch(`https://${host}/`));
+    await Promise.all(failed.map((promise) => assert.rejects(promise)));
+    assert.equal(calls, 3);
+
+    const started = performance.now();
+    await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => error instanceof OfflineError);
+    assert.ok(performance.now() - started < 50, "the refused lookup did not reach the delayed resolver");
+    assert.equal(calls, 3);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
 
 test("a name that rebinds between the check and the connection is refused without a request", async (t) => {
   const server = await loopbackServer((_path, response) => { response.writeHead(200); response.end("ok"); });
