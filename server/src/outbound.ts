@@ -101,6 +101,7 @@ interface HostState {
   trialInFlight: boolean;
   rejected: number;
   opened: number;
+  openedAt: number;
 }
 
 const seconds = (ms: number) => Math.max(1, Math.round(ms / 1000));
@@ -170,7 +171,7 @@ export class OutboundGuard {
       entry = {
         active: 0, queue: [], lastKey: "", lastStartedAt: 0, touchedAt: this.now(),
         state: "closed", failures: 0, openUntil: 0, cooldownMs: this.config.cooldownMs,
-        trialInFlight: false, rejected: 0, opened: 0,
+        trialInFlight: false, rejected: 0, opened: 0, openedAt: 0,
       };
       this.hosts.set(host, entry);
     }
@@ -306,6 +307,7 @@ export class OutboundGuard {
     entry.state = "open";
     entry.openUntil = this.now() + pause;
     entry.opened += 1;
+    entry.openedAt = this.now();
     log("WARN", "Circuit breaker opened for the host", { host, failures: entry.failures, pauseSeconds: seconds(pause), reason });
   }
 
@@ -567,9 +569,11 @@ export class OutboundGuard {
       }));
   }
 
-  closeAfterOutage(): void {
+  /** Closes the breakers the outage opened; a host that was dead before it stays out. */
+  closeAfterOutage(since: number): void {
     for (const entry of this.hosts.values()) {
       if (entry.state !== "open" && entry.state !== "half-open") continue;
+      if (entry.openedAt < since) continue;
       entry.state = "closed";
       entry.failures = 0;
       entry.cooldownMs = this.config.cooldownMs;
@@ -583,9 +587,9 @@ export const outbound = new OutboundGuard();
 
 export const metadataOutbound = new OutboundGuard(metadataConfigFromEnv());
 
-connectivity.onOnline(() => {
-  outbound.closeAfterOutage();
-  metadataOutbound.closeAfterOutage();
+connectivity.onOnline((since) => {
+  outbound.closeAfterOutage(since);
+  metadataOutbound.closeAfterOutage(since);
 });
 
 const hostOf = (raw: string): string | undefined => {

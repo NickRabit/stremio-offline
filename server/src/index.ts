@@ -28,7 +28,7 @@ import { Throughput } from "./throughput.js";
 import { sourcePace } from "./conversion-pace.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, publicAddonRestricted, resolvePublicHost } from "./security.js";
+import { publicAddon, publicAddonRestricted } from "./security.js";
 import { withProxiedArtwork } from "./addon-view.js";
 import { RestrictedError, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { passwordChangeMiddleware, roleMiddleware } from "./roles.js";
@@ -1051,7 +1051,7 @@ const publicAddonView = (addon: AddonRecord) =>
     : withProxiedArtwork(publicAddon(addon), images));
 
 app.get("/api/status", (_req, res) => {
-  connectivity.probeIfDue((host) => resolvePublicHost(host));
+  connectivity.probeIfDue();
   const offlineSince = connectivity.offlineSince;
   res.json({
     status: "ok",

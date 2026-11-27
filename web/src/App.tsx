@@ -1585,7 +1585,9 @@ export function App() {
         if (!stopped) applyInternet(info);
       } catch { /* keep the last known internet state */ }
       if (stopped || document.visibilityState !== "visible") return;
-      timer = window.setTimeout(() => { void tick(); }, internet.status === "offline" ? 10_000 : 30_000);
+      // A visibility change during the request may have scheduled its own timer already.
+      clear();
+      timer = window.setTimeout(() => { void tick(); }, interval);
     };
     const onVisibility = () => {
       clear();

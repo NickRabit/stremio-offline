@@ -51,7 +51,7 @@ const withEnv = (t: TestContext, name: string, value: string) => {
   t.after(() => { delete process.env[name]; });
 };
 
-test("a fourth public host fails immediately after three distinct lookup failures", async () => {
+test("a public host fails immediately once the resolver is known to be unreachable", async () => {
   resetConnectivityForTests();
   let calls = 0;
   setDnsLookup((_hostname, _options, callback) => {
@@ -61,12 +61,30 @@ test("a fourth public host fails immediately after three distinct lookup failure
   try {
     const failed = ["one.test", "two.test", "three.test"].map((host) => safeFetch(`https://${host}/`));
     await Promise.all(failed.map((promise) => assert.rejects(promise)));
-    assert.equal(calls, 3);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const before = calls;
 
     const started = performance.now();
     await assert.rejects(safeFetch("https://four.test/"), (error: unknown) => error instanceof OfflineError);
     assert.ok(performance.now() - started < 50, "the refused lookup did not reach the delayed resolver");
-    assert.equal(calls, 3);
+    assert.equal(calls, before);
+  } finally {
+    setDnsLookup();
+    resetConnectivityForTests();
+  }
+});
+
+test("names that do not exist never switch the server offline", async () => {
+  resetConnectivityForTests();
+  setDnsLookup((hostname, _options, callback) => {
+    if (hostname === "good.test") callback(null, [{ address: "93.184.216.34", family: 4 }]);
+    else callback(Object.assign(new Error("no such name"), { code: "ENOTFOUND" }));
+  });
+  try {
+    for (const host of ["gone.test", "typo.test", "dead.test", "old.test"]) {
+      await assert.rejects(validateRemoteUrl(`https://${host}/`), (error: unknown) => !(error instanceof OfflineError));
+    }
+    assert.equal((await validateRemoteUrl("https://good.test/")).hostname, "good.test");
   } finally {
     setDnsLookup();
     resetConnectivityForTests();

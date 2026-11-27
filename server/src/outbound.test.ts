@@ -149,9 +149,18 @@ test("closing breakers after an outage returns open hosts to service", async () 
   for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("addon.test", boom));
   assert.equal(guard.diagnostics()[0]?.state, "open");
 
-  guard.closeAfterOutage();
+  guard.closeAfterOutage(0);
   assert.deepEqual(guard.diagnostics(), []);
   assert.equal((await guard.run("addon.test", reply(200))).status, 200);
+});
+
+test("a breaker opened before the outage stays open when the connection returns", async () => {
+  const { guard, advance } = harness();
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("dead.test", boom));
+  advance(1_000);
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("outage.test", boom));
+  guard.closeAfterOutage(1_000_500);
+  assert.deepEqual(guard.diagnostics().map((entry) => [entry.host, entry.state]), [["dead.test", "open"]]);
 });
 
 test("a 429 still opens that guard, and Retry-After decides the pause", async () => {

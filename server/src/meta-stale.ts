@@ -71,10 +71,12 @@ export class StaleMetaStore {
     const now = this.now();
     if (this.lastPrunedAt !== undefined && now - this.lastPrunedAt < PRUNE_INTERVAL_MS) return;
     this.lastPrunedAt = now;
-    await database.run(
+    const pruned = await database.run(
       `DELETE FROM meta_stale WHERE key IN (
         SELECT key FROM meta_stale ORDER BY at, key LIMIT max(0, (SELECT count(*) FROM meta_stale) - ${ROW_LIMIT})
       )`,
     );
+    // A pruned key must be written again the next time it is remembered.
+    if (pruned.changes > 0) this.hashes.clear();
   }
 }

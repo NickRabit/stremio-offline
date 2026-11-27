@@ -112,7 +112,11 @@ const lookupAll = (host: string): Promise<LookupAddress[]> =>
     });
   });
 
-export const resolvePublicHost = (host: string): Promise<LookupAddress[]> => lookupAll(host);
+// The probe and the cross-check ask the resolver directly: going through admitLookup would let
+// them take the slot a waiting request needs.
+connectivity.useResolver((host) => new Promise((resolve, reject) => {
+  dnsLookup(host, { all: true }, (error, address) => { if (error) reject(error); else resolve(address); });
+}));
 
 /** The agent asks this at connection time, so a name whose first answer was public cannot
  *  answer a private address when the socket is actually opened. */

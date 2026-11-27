@@ -80,3 +80,22 @@ test("pruning keeps the newest 5 000 metadata rows", async (t) => {
   assert.equal(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["old-0"]), undefined);
   assert.ok(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["newest"]));
 });
+
+test("a key the cap pruned is written again the next time it is remembered", async (t) => {
+  const database = await databaseFixture(t);
+  let now = 1;
+  const store = new StaleMetaStore(() => now);
+  store.attachDatabase(database);
+  await store.remember("k0", film("Kept in memory"));
+  now = 2;
+  await database.batch(Array.from({ length: 5_000 }, (_, index) => ({
+    sql: "INSERT INTO meta_stale (key, data, at) VALUES (?, ?, ?)",
+    params: [`later-${index}`, JSON.stringify(film(`Later ${index}`)), 10 + index],
+  })));
+  now = 2 + 60 * 60_000;
+  await store.remember("newest", film("Newest"));
+  assert.equal(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["k0"]), undefined);
+
+  await store.remember("k0", film("Kept in memory"));
+  assert.ok(await database.get("SELECT key FROM meta_stale WHERE key = ?", ["k0"]));
+});
