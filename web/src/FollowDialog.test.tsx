@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { FollowDialog } from "./FollowDialog";
@@ -135,6 +135,9 @@ describe("FollowDialog", () => {
   });
 
   it("a waiting film inside the window says it is waiting for the preferred audio", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-22T12:00:00.000Z"));
+    onTestFinished(() => { vi.useRealTimers(); });
     await render({ ...follow, type: "movie", metaId: "tt9", name: "Film", autoDownload: { ...follow.autoDownload!, graceDays: 7 }, movie: { released: "2026-11-20T23:59:59.999Z", releaseKind: "digital", state: "waiting", nextAttemptAt: "2026-11-21T10:00:00.000Z", graceUntil: "2026-11-27T23:59:59.999Z" } }, []);
     expect(host.textContent).toContain("waiting for English until");
   });
