@@ -159,7 +159,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
 test("large raised subtitles stay above the controls on phones", async ({ page, request }, testInfo) => {
   test.skip(!["mobile", "mobile-landscape", "mobile-landscape-small"].includes(testInfo.project.name), "phone subtitle layout");
   const saved = await request.patch("/api/settings", {
-    data: { subtitleStyle: { size: 200, position: 20 } },
+    data: { subtitleStyle: { size: 200, color: "white", textOpacity: 100, background: "none", backgroundOpacity: 75, edge: "shadow", position: 20 } },
   });
   expect(saved.ok()).toBe(true);
   try {
