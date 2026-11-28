@@ -912,6 +912,8 @@ html.dialog-locked,html.dialog-locked body{overflow:hidden;overscroll-behavior:n
 .player-badges i{font-style:normal;font-size:10px;font-weight:800;padding:2px 6px;border:1px solid #ffffff33;border-radius:5px;color:var(--text)}
 .player-meta{display:flex;align-items:baseline;gap:12px;margin:0 0 4px;min-width:0}
 .player-chapter{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.player-speed{margin-left:auto;font-size:11px;font-weight:700;color:var(--text);white-space:nowrap;flex-shrink:0}
+.player-speed+.player-ends-at{margin-left:0}
 .player-ends-at{margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap;flex-shrink:0}
 .player-chapters{display:grid;gap:2px;max-height:220px;overflow:auto}
 .player-chapters button{justify-content:space-between;font-size:11px;padding:7px 9px}

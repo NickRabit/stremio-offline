@@ -131,6 +131,7 @@ let heldWrite: Promise<Response> | null;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   setLocale("en");
+  localStorage.removeItem("player-speed");
   // The player measures its control bar and its viewport; jsdom ships neither.
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("matchMedia", (query: string) => ({
@@ -1485,6 +1486,114 @@ describe("Player stall advice", () => {
     await stallAt(12);
     await flush();
     expect(hint()).toBeNull();
+  });
+});
+
+describe("Player playback speed", () => {
+  const speedSelect = () => host.querySelector<HTMLSelectElement>('select[aria-label="Speed"]');
+  const chooseSpeed = async (value: string) => {
+    await openSettings();
+    const select = speedSelect()!;
+    await act(async () => {
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+  };
+  const pressKey = async (key: string) => {
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+    await flush();
+  };
+  const stallAt = async (seconds: number) => {
+    const video = host.querySelector("video")!;
+    Object.defineProperty(video, "currentTime", { configurable: true, get: () => seconds, set: () => undefined });
+    for (let i = 0; i < 3; i += 1) await act(async () => { video.dispatchEvent(new Event("waiting")); });
+    await flush();
+  };
+
+  it("shows the speed picker before a session exists", async () => {
+    await render({ stream: null });
+    await openSettings();
+    expect(speedSelect()).not.toBeNull();
+    expect(host.querySelector('select[aria-label="Quality"]')).toBeNull();
+  });
+
+  it("puts the speed picker after quality and applies and stores the choice", async () => {
+    await render();
+    await openSettings();
+    const panel = host.querySelector("#player-settings")!;
+    const selects = [...panel.querySelectorAll("select")];
+    const qualityIndex = selects.findIndex((select) => select.getAttribute("aria-label") === "Quality");
+    expect(qualityIndex).toBeGreaterThanOrEqual(0);
+    expect(selects[qualityIndex + 1]).toBe(speedSelect());
+    expect([...speedSelect()!.options].map((option) => option.textContent))
+      .toEqual(["0.5×", "0.75×", "Normal", "1.25×", "1.5×", "1.75×", "2×"]);
+
+    await chooseSpeed("1.5");
+    const video = host.querySelector<HTMLVideoElement>("video")!;
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.defaultPlaybackRate).toBe(1.5);
+    expect(localStorage.getItem("player-speed")).toBe("1.5");
+  });
+
+  it("applies the chosen speed again when metadata loads", async () => {
+    await render();
+    await chooseSpeed("1.5");
+    const video = host.querySelector<HTMLVideoElement>("video")!;
+    video.playbackRate = 1;
+    await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.defaultPlaybackRate).toBe(1.5);
+  });
+
+  it("steps speed with angle brackets and leaves subtitle timing on commas", async () => {
+    sessionShape = sidecarSession();
+    await render();
+    await pressKey(">");
+    expect(host.querySelector<HTMLVideoElement>("video")!.playbackRate).toBe(1.25);
+    await pressKey("<");
+    expect(host.querySelector<HTMLVideoElement>("video")!.playbackRate).toBe(1);
+    await pressKey(",");
+    await openSettings();
+    expect(host.querySelector(".subtitle-delay output")?.textContent).toBe("-0.25 s");
+  });
+
+  it("shows the speed badge even without a finish time", async () => {
+    sessionShape = { duration: 0 };
+    await render();
+    expect(host.querySelector(".player-meta")).toBeNull();
+    await chooseSpeed("1.5");
+    expect(host.querySelector(".player-speed")?.textContent).toBe("1.5×");
+    expect(host.querySelector(".player-ends-at")).toBeNull();
+    await chooseSpeed("1");
+    expect(host.querySelector(".player-speed")).toBeNull();
+    expect(host.querySelector(".player-meta")).toBeNull();
+  });
+
+  it("offers normal speed instead of lower quality while fast playback stalls", async () => {
+    await render();
+    await chooseSpeed("1.5");
+    await stallAt(12);
+    const hint = host.querySelector(".player-hint")!;
+    expect(hint.textContent).toContain("Playback keeps stalling at this speed.");
+    expect(hint.textContent).toContain("Normal speed");
+    expect(hint.textContent).not.toContain("Drop to");
+
+    const normalize = [...hint.querySelectorAll("button")].find((button) => button.textContent === "Normal speed")!;
+    await click(normalize);
+    expect(host.querySelector(".player-hint")).toBeNull();
+    expect(host.querySelector<HTMLVideoElement>("video")!.playbackRate).toBe(1);
+    expect(speedSelect()?.value).toBe("1");
+  });
+
+  it("keeps the existing quality advice at normal speed", async () => {
+    sessionShape = { acceleration: true, quality: 720 };
+    await render();
+    await stallAt(12);
+    const hint = host.querySelector(".player-hint")!;
+    expect(hint.textContent).toContain("Playback keeps stalling.");
+    expect(hint.textContent).toContain("Drop to 480p");
+    expect(hint.textContent).not.toContain("Normal speed");
   });
 });
 

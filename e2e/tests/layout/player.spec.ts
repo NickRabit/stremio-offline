@@ -44,6 +44,18 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
   await expect(overlay.locator(".player-settings")).toBeVisible();
+  const speedSelect = overlay.getByRole("combobox", { name: "Rychlost", exact: true });
+  if (testInfo.project.name === "mobile-landscape-small") {
+    const panel = overlay.locator("#player-settings");
+    await expect(speedSelect).toBeVisible();
+    expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
+    const panelBox = (await panel.boundingBox())!;
+    const selectBox = (await speedSelect.boundingBox())!;
+    expect(selectBox.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+    expect(selectBox.y).toBeGreaterThanOrEqual(panelBox.y - 1);
+    expect(selectBox.x + selectBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+    expect(selectBox.y + selectBox.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 1);
+  }
   await page.waitForTimeout(3800);
   await expect(overlay).not.toHaveClass(/controls-hidden/);
   const overflow = await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth);
@@ -101,6 +113,19 @@ test("player keeps its picture stable and its overlay controls reachable", async
     await checkPortrait();
     await page.setViewportSize({ width: 320, height: viewport.height });
     await checkPortrait();
+    await speedSelect.selectOption("1.5");
+    const speed = overlay.locator(".player-speed");
+    const endsAt = overlay.locator(".player-ends-at");
+    await expect(speed).toHaveText("1,5×");
+    await expect(endsAt).toBeVisible();
+    const speedBox = (await speed.boundingBox())!;
+    const endsAtBox = (await endsAt.boundingBox())!;
+    expect(Math.abs((speedBox.y + speedBox.height / 2) - (endsAtBox.y + endsAtBox.height / 2))).toBeLessThanOrEqual(1);
+    for (const box of [speedBox, endsAtBox]) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    await speedSelect.selectOption("1");
     await page.setViewportSize(viewport);
   }
 

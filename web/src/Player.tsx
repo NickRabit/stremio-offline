@@ -10,6 +10,7 @@ import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
+import { applySpeed, formatSpeed, parseSpeed, readSpeed, SPEEDS, stepSpeed, writeSpeed, type Speed } from "./player-speed";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
 import { remoteVersionKey, versionSavedRow } from "./source-progress";
@@ -233,7 +234,7 @@ const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | n
 };
 
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
-const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
+const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f", "<", ">"]);
 const SHORT_END_RESTARTS = 3;
 const SHORT_END_PROGRESS_S = 60;
 const PAUSED_REPORT_MS = 15_000;
@@ -297,6 +298,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [pictureFilled, setPictureFilled] = useState(false);
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
+  const [speed, setSpeedState] = useState<Speed>(() => readSpeed());
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const setSpeed = (next: Speed) => {
+    setSpeedState(next);
+    speedRef.current = next;
+    writeSpeed(next);
+  };
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioPreferenceRef = useRef(audioLanguage);
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
@@ -390,6 +399,23 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     video.addEventListener("volumechange", remember);
     return () => video.removeEventListener("volumechange", remember);
   }, [open, volume]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const apply = () => applySpeed(video, speedRef.current);
+    apply();
+    video.addEventListener("loadedmetadata", apply);
+    return () => video.removeEventListener("loadedmetadata", apply);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (video) applySpeed(video, speed);
+  }, [open, speed]);
+
   const hlsRef = useRef<Hls | null>(null);
   /** Bumped by every attach, so one still waiting for hls.js knows a later one replaced it. */
   const attachSeqRef = useRef(0);
@@ -467,6 +493,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
   const earlyStallRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
+  const [speedHint, setSpeedHint] = useState(false);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
   const [resumedFrom, setResumedFrom] = useState(0);
@@ -909,7 +936,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setError(""); setUserPaused(false); setPlaybackFailed(false); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
-    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setDownloadState("idle");
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); setDownloadState("idle");
     decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); sidecarHoldingRef.current = false; sidecarLastStateRef.current = null; sidecarCoverageRef.current = -Infinity; sidecarStartRef.current = -Infinity; cancelSidecarMove(); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
@@ -1273,7 +1300,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const changeQuality = (value: number | null) => {
-    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null);
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false);
     void changeTrack({ quality: value });
   };
 
@@ -1316,6 +1343,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
+    if (speedRef.current > 1) {
+      stallAdviceEpochRef.current += 1;
+      setQualityHint(null);
+      setSpeedHint(true);
+      return;
+    }
+    setSpeedHint(false);
     // A lower quality usually cuts the bitrate, which fixes stalling caused by the network; a file
     // that already fits a quality is copied at its own bitrate, so for one the offer helps less.
     // It also means transcoding, which a weak CPU cannot keep up with unaided -- the advice
@@ -1327,6 +1361,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       hardware: session?.hardware, acceleration: session?.acceleration,
     });
     const offerLower = () => {
+      if (speedRef.current > 1) {
+        setQualityHint(null);
+        setSpeedHint(true);
+        return;
+      }
+      setSpeedHint(false);
       const target = lowerQuality(session?.quality ?? null);
       if (target !== null) setQualityHint(target);
     };
@@ -1813,6 +1853,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
       else if (event.key === "c" || event.key === "t") { event.preventDefault(); setSubtitlesHidden((value) => !value); }
+      else if (event.key === "<") { event.preventDefault(); setSpeed(stepSpeed(speedRef.current, -1)); }
+      else if (event.key === ">") { event.preventDefault(); setSpeed(stepSpeed(speedRef.current, 1)); }
       else if (event.key === ",") { event.preventDefault(); nudgeSubtitlesRef.current(-SUBTITLE_DELAY_STEP_S); }
       else if (event.key === ".") { event.preventDefault(); nudgeSubtitlesRef.current(SUBTITLE_DELAY_STEP_S); }
       else if (event.key === "f") void toggleFullscreen();
@@ -1832,7 +1874,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
   const chapterIndex = chapterAt(chapters, position);
   // The minute tick only re-renders a paused player; while playing the position moves the clock along.
-  const endAt = endsAt(Math.max(now, Date.now()), position, duration);
+  const endAt = endsAt(Math.max(now, Date.now()), position, duration, speed);
   const segment = activeSegment(segments, position);
   const nextPoint = upNextPoint(upNextAt, duration, segments?.outro);
   const subtitleValue = session?.subtitleTrack !== null && session?.subtitleTrack !== undefined
@@ -1947,10 +1989,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       {seekKept && !resumedFrom && !error && <div className="player-resumed" role="status">{t("player.seekRestored")}</div>}
       {buffering && !error && <div className="player-buffer">{t("common.loading")}</div>}
       {error && <div className="player-error">{error}</div>}
+      {speedHint && !error && <div className="player-hint">
+        <span>{t("player.speedStalling")}</span>
+        <button onClick={() => { setSpeed(1); stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}>{t("player.speedBackToNormal")}</button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}><X /></button>
+      </div>}
       {qualityHint !== null && !error && <div className="player-hint">
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
-        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); }}><X /></button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}><X /></button>
       </div>}
       {upNext && <div className="player-up-next" role="status">
         <small>{t("player.upNext")}</small>
@@ -1964,8 +2011,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }}>{t(SKIP_KEY[segment.kind])}</button>}
     </div>
     <div ref={bottomRef} className="player-bottom">
-      {(chapterIndex >= 0 && chapters || endAt !== null) && <div className="player-meta" aria-live="off">
+      {((chapterIndex >= 0 && chapters) || endAt !== null || speed !== 1) && <div className="player-meta" aria-live="off">
         {chapterIndex >= 0 && chapters && <div className="player-chapter">{chapterLabel(chapters, chapterIndex)}</div>}
+        {speed !== 1 && <span className="player-speed">{formatSpeed(speed)}</span>}
         {endAt !== null && <span className="player-ends-at">{t("player.endsAt", { time: formatEndsAt(endAt) })}</span>}
       </div>}
       <div className="timeline">
@@ -2020,6 +2068,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {QUALITIES.map((height) => <option key={height} value={height}>{height}p</option>)}
         </select>
       </label>}
+      <label className="track-picker" title={t("player.speedKey")}>
+        <Gauge />
+        <select aria-label={t("player.speed")} value={speed} onChange={(event) => setSpeed(parseSpeed(event.target.value))}>
+          {SPEEDS.map((value) => <option key={value} value={value}>{value === 1 ? t("player.speedNormal") : formatSpeed(value)}</option>)}
+        </select>
+      </label>
 
       {(session?.audioTracks.length ?? 0) > 1 && <label className="track-picker" title={t("player.audioTrack")}>
         <AudioLines />
