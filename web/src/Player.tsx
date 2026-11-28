@@ -1935,6 +1935,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     { subtitleStyle, subtitleStyleHdr },
     Boolean(session?.playing?.hdr),
   );
+  const subtitleVars = subtitleStyleVars(subtitleStyleForSession);
   const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
   const chapterIndex = chapterAt(chapters, position);
   // The minute tick only re-renders a paused player; while playing the position moves the clock along.
@@ -1946,7 +1947,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
   const pipLabel = t(pip ? "player.exitPictureInPicture" : "player.pictureInPicture");
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} style={subtitleStyleVars(subtitleStyleForSession)} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}${Object.keys(subtitleVars).length ? " custom-subtitles" : ""}`} style={subtitleVars} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong>{badges.length > 0 && <span className="player-badges">{badges.map((badge) => <i key={badge}>{badge}</i>)}</span>}</div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>

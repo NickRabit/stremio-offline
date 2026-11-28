@@ -387,6 +387,7 @@ describe("Player subtitle appearance", () => {
     const subtitles = await showCues();
     const overlay = host.querySelector<HTMLElement>(".player-overlay")!;
     expect(overlay.getAttribute("style") ?? "").not.toContain("--sub-");
+    expect(overlay.classList.contains("custom-subtitles")).toBe(false);
     expect(subtitles.textContent).toBe("First subtitle line\nSecond subtitle line");
     expect(subtitles.children).toHaveLength(0);
   });
@@ -398,6 +399,7 @@ describe("Player subtitle appearance", () => {
     });
     await render({ subtitleStyle: styledSubtitles({ size: 150, position: 10 }) });
     const overlay = host.querySelector<HTMLElement>(".player-overlay")!;
+    expect(overlay.classList.contains("custom-subtitles")).toBe(true);
     expect(overlay.style.getPropertyValue("--sub-scale")).toBe("1.5");
     expect(overlay.style.getPropertyValue("--sub-color")).toBe("rgba(255, 233, 77, 0.75)");
     expect(overlay.style.getPropertyValue("--sub-lift")).toBe("calc(10 * 1dvh / var(--ui-scale, 1))");

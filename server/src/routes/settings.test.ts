@@ -1562,6 +1562,23 @@ test("a backup with an SDR subtitle style and no HDR style clears the imported a
   assert.equal(harness.state.userData?.[ADA]?.prefs.subtitleStyleHdr, undefined);
 });
 
+test("a backup with only an HDR subtitle style clears the imported account's SDR style", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![ADA]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, size: 75 };
+  const subtitleStyleHdr = { ...DEFAULT_SUBTITLE_STYLE, textOpacity: 75 as const };
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backupFile({ settings: { concurrentDownloads: 3, subtitleStyleHdr } }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.subtitleStyle, undefined);
+  assert.deepEqual(harness.state.userData?.[ADA]?.prefs.subtitleStyleHdr, subtitleStyleHdr);
+});
+
 test("an older backup with neither subtitle style leaves both account styles in place", async (t) => {
   const harness = await mount();
   t.after(harness.close);

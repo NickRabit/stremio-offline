@@ -400,8 +400,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       const userId = accountIdOf(req);
       if (userId) mutateData(state, userId, (data) => {
         data.prefs = { ...data.prefs, ...split.prefs };
+        // A backup that carries one style speaks for both: the other one was the default there.
         if (split.prefs.subtitleStyle !== undefined && split.prefs.subtitleStyleHdr === undefined) {
           delete data.prefs.subtitleStyleHdr;
+        }
+        if (split.prefs.subtitleStyleHdr !== undefined && split.prefs.subtitleStyle === undefined) {
+          delete data.prefs.subtitleStyle;
         }
       });
       if (backup.sourceProfiles !== undefined) {
