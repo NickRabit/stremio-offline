@@ -1597,14 +1597,15 @@ describe("Player playback speed", () => {
     expect(host.querySelector('select[aria-label="Quality"]')).toBeNull();
   });
 
-  it("puts the speed picker after quality and applies and stores the choice", async () => {
+  it("puts the speed picker first, before quality, and applies and stores the choice", async () => {
     await render();
     await openSettings();
     const panel = host.querySelector("#player-settings")!;
     const selects = [...panel.querySelectorAll("select")];
     const qualityIndex = selects.findIndex((select) => select.getAttribute("aria-label") === "Quality");
     expect(qualityIndex).toBeGreaterThanOrEqual(0);
-    expect(selects[qualityIndex + 1]).toBe(speedSelect());
+    expect(selects[0]).toBe(speedSelect());
+    expect(selects[1]).toBe(selects[qualityIndex]);
     expect([...speedSelect()!.options].map((option) => option.textContent))
       .toEqual(["0.5×", "0.75×", "Normal", "1.25×", "1.5×", "1.75×", "2×"]);
 

@@ -118,7 +118,9 @@ test("player keeps its picture stable and its overlay controls reachable", async
     await checkPortrait();
     await page.setViewportSize({ width: 320, height: viewport.height });
     await checkPortrait();
+    // The clip is two seconds long and the test keeps it at 0.1x; the speed picker must not let it end.
     await speedSelect.selectOption("1.5");
+    await video.evaluate((element: HTMLVideoElement) => { element.playbackRate = 0.1; });
     const speed = overlay.locator(".player-speed");
     const endsAt = overlay.locator(".player-ends-at");
     await expect(speed).toHaveText("1,5×");
@@ -131,6 +133,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
       expect(box.x + box.width).toBeLessThanOrEqual(320);
     }
     await speedSelect.selectOption("1");
+    await video.evaluate((element: HTMLVideoElement) => { element.playbackRate = 0.1; });
     await page.setViewportSize(viewport);
   }
 

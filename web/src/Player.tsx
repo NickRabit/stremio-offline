@@ -2127,6 +2127,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
       {pipAvailable && phonePortrait && <button className="player-pip-row" aria-label={pipLabel} title={pipLabel} aria-pressed={pip} onClick={togglePip}><PictureInPicture2 /> {t("player.pictureInPictureRow")}</button>}
+      <label className="track-picker" title={t("player.speedKey")}>
+        <Gauge />
+        <select aria-label={t("player.speed")} value={speed} onChange={(event) => setSpeed(parseSpeed(event.target.value))}>
+          {SPEEDS.map((value) => <option key={value} value={value}>{value === 1 ? t("player.speedNormal") : formatSpeed(value)}</option>)}
+        </select>
+      </label>
       {session && <label className="track-picker" title={t("player.quality")}>
         <SlidersHorizontal />
         <select aria-label={t("player.quality")} value={session.quality ?? "original"}
@@ -2135,12 +2141,6 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {QUALITIES.map((height) => <option key={height} value={height}>{height}p</option>)}
         </select>
       </label>}
-      <label className="track-picker" title={t("player.speedKey")}>
-        <Gauge />
-        <select aria-label={t("player.speed")} value={speed} onChange={(event) => setSpeed(parseSpeed(event.target.value))}>
-          {SPEEDS.map((value) => <option key={value} value={value}>{value === 1 ? t("player.speedNormal") : formatSpeed(value)}</option>)}
-        </select>
-      </label>
 
       {(session?.audioTracks.length ?? 0) > 1 && <label className="track-picker" title={t("player.audioTrack")}>
         <AudioLines />
