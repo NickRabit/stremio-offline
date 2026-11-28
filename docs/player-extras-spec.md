@@ -161,7 +161,9 @@ Size: web **S**, TV **S–M**.
 - **v1: native video PiP while the player is open (S–M).**
   - A button in `player-view-controls` (`Player.tsx:1982-1987`). It is shown
     only when `document.pictureInPictureEnabled` or
-    `webkitSupportsPresentationMode("picture-in-picture")` is true.
+    `webkitSupportsPresentationMode("picture-in-picture")` is true. On a
+    phone held upright the entry moves into the settings panel instead (see
+    [section 4](#4-phone-layout)).
   - The button and `p` toggle the current video's PiP mode. Enable entry
     after video metadata is available and call the supported API directly
     from the user gesture. On success, leave overlay fullscreen if still
@@ -373,7 +375,96 @@ appear in native PiP either.
 
 Size: server + web **M**, TV **M**.
 
-## 4. Order and PR boundaries
+## 4. Phone layout
+
+The player controls on a phone have no spare room. Every PR in this document
+must keep them usable on the `mobile`, `mobile-landscape` and
+`mobile-landscape-small` projects, and at 360 and 320 px wide, as
+`e2e/tests/layout/player.spec.ts` already checks.
+
+### Current budget
+
+- **Phone held upright** (`style.css:990-1007`). Playback (−10, play, +10)
+  has its own centred row. Under it, every other button sits in **one row**
+  of 44 × 44 px icons, spread edge to edge. The layout test requires a single
+  row with even gaps and no horizontal scrolling at 390, 360 and 320 px
+  (`player.spec.ts:68-101`). At 320 px the row has about 312 px, which is
+  room for **seven** icons and no more. The fullest row today already has
+  seven: previous, next, subtitles, fill, sources, settings and fullscreen.
+  Fullscreen is absent where the browser has no element fullscreen, for
+  example on iPhone.
+- **Phone held sideways** (`style.css:894-902`, `924`). One row without
+  wrapping. The volume slider is hidden and the gaps shrink to 4 px, or 2 px
+  below 380 px. There is room for one more icon at the usual landscape
+  widths (about 640 to 850 px).
+- **Above the controls.** `player-meta` holds the chapter (it truncates) and
+  the finish time (it does not). The settings panel scrolls
+  (`style.css:867`, `901`).
+- **Subtitles.** On phones the size is
+  `clamp(15px, 3vw/ui-scale, 22px)` (`style.css:900`). The layer sits above
+  `--player-bottom-height`, under the picture when the phone is upright.
+
+### Rules for these features
+
+- **Speed.**
+  - No new bar button. The speed row lives in the settings panel, directly
+    under Quality, so it stays visible without scrolling on
+    `mobile-landscape-small` (360 px tall).
+  - The "1.5×" badge goes into `player-meta` before the finish time. It does
+    not shrink, and the chapter still truncates first. On an upright 320 px
+    phone the chapter, the badge and "Ends at" fit on one line, or the
+    chapter yields entirely.
+- **Picture in picture.**
+  - Phone held upright (`max-width: 700px` and portrait): **no bar button.**
+    PiP is a row at the top of the settings panel, so the seven-icon row
+    stays as it is.
+  - Phone held sideways, tablets and desktop: a bar button in
+    `player-view-controls`, before Settings.
+  - On Android Chrome the system also offers PiP when the user leaves the
+    app with the video playing. That needs no button, but it must behave
+    like a PiP entered from the menu (subtitle mode, exit, closing the
+    player) **[verify on a device]**.
+- **Subtitle styling.**
+  - The size presets scale the phone clamp, not a fixed pixel size. At 200 %
+    on an upright 320 px phone, a two-line cue must stay inside the viewport
+    and must not overlap the transport row or the player head.
+  - On phones, cap the result so that a long line takes no more than three
+    rows. The cap is applied in CSS (`min()` on the scaled clamp), not by
+    changing the saved preference.
+  - The position lift adds to the controls lift. While the controls are up,
+    the subtitle must stay clear of the transport row. The layout test checks
+    this with the highest lift.
+  - The settings preview box keeps 16:9 and its own width on phones, so the
+    sample line wraps the way the player wraps it.
+
+### Tests
+
+Extend `e2e/tests/layout/player.spec.ts`. These checks must fail on a build
+that simply adds the new button to the bar.
+
+- With a session that has previous, next, subtitles, sources and
+  fullscreen, plus a PiP stub that reports support:
+  - At 390, 360 and 320 px upright, the icon row still has one line, at most
+    seven icons, no horizontal scrolling, and every button at least
+    44 × 44 px.
+  - The PiP row is in the settings panel.
+- The same session sideways (`mobile-landscape` and
+  `mobile-landscape-small`) shows the PiP bar button inside the viewport.
+- The speed badge and "Ends at" are both visible and on one line at 320 px
+  upright, with a long chapter name.
+- Subtitle styling at size 200 % and the highest lift, with a two-line cue,
+  in all three phone projects: the cue box stays inside the viewport and
+  does not intersect `.player-bottom` while the controls are visible.
+- The settings panel on `mobile-landscape-small`: the speed row is visible
+  without scrolling.
+
+### Manual
+
+Check on a real iPhone and an Android phone, both upright and sideways: the
+speed menu, the badge, PiP from the settings panel, and subtitles at the
+largest size.
+
+## 5. Order and PR boundaries
 
 The first three PRs share `Player.tsx`. Land those changes in sequence.
 
@@ -390,7 +481,7 @@ Steps 1 and 2 are independent and fit a cheaper implementer. Step 3 is
 contained but touches the settings contract and the backup, so the reviewer
 checks those paths with care.
 
-## 5. Open questions for the owner
+## 6. Open questions for the owner
 
 1. **Remembering the speed:** per device like the volume, or reset every time
    the player opens?
