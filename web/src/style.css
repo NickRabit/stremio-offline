@@ -2961,4 +2961,4 @@ main.view-title-detail.person-open > .person-view{flex:1 1 auto;min-height:0;ove
 .remote-root-placeholder .library-copy small{width:45%;margin-top:4px}
 @media(prefers-reduced-motion:no-preference){.remote-root-placeholder .browse-art{animation:remote-root-pulse 1.4s ease-in-out infinite}}
 @keyframes remote-root-pulse{50%{opacity:.55}}
-.subtitle-preview{position:relative;width:100%;max-width:480px;aspect-ratio:16/9;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:linear-gradient(160deg,#18202b,#030507 72%)}.subtitle-preview .player-subtitles{bottom:calc(var(--player-bottom-height,0px) + 12px + var(--sub-lift,0px))}
+.subtitle-preview{position:relative;width:100%;max-width:480px;aspect-ratio:16/9;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:linear-gradient(160deg,#18202b,#030507 72%)}.subtitle-preview{container-type:inline-size}.subtitle-preview .player-subtitles{left:5%;right:5%;bottom:calc(var(--player-bottom-height,0px) + 12px + var(--sub-lift,0px));font-size:calc(clamp(12px,4cqw,28px) * var(--sub-scale,1))}
