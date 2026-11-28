@@ -87,7 +87,7 @@ the overlay was built to avoid.
   Never per account.
 - **Ends at.** `endsAt(now, position, duration, speed = 1)` divides the
   remaining time by the speed. The same change goes into `PlayerClock.kt`.
-- **UI.** A select row in the player settings panel next to Quality
+- **UI.** A select row at the top of the player settings panel, above Quality
   (`Player.tsx:1990+`), in the existing `track-picker` style. A small "1.5×"
   badge in `player-meta` whenever the speed is not 1, so a forgotten speed is
   visible.
@@ -407,9 +407,9 @@ must keep them usable on the `mobile`, `mobile-landscape` and
 ### Rules for these features
 
 - **Speed.**
-  - No new bar button. The speed row lives in the settings panel, directly
-    under Quality, so it stays visible without scrolling on
-    `mobile-landscape-small` (360 px tall).
+  - No new bar button. The speed row is the first row of the settings panel,
+    above Quality: on `mobile-landscape-small` (360 px tall) the panel shows
+    its head and one row, and a row under Quality was measured out of view.
   - The "1.5×" badge goes into `player-meta` before the finish time. It does
     not shrink, and the chapter still truncates first. On an upright 320 px
     phone the chapter, the badge and "Ends at" fit on one line, or the
