@@ -409,7 +409,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         if (split.prefs.subtitleStyleHdr !== undefined && split.prefs.subtitleStyle === undefined) {
           delete data.prefs.subtitleStyle;
         }
-        if (data.prefs.subtitleStyle && isDefaultSubtitleStyle(data.prefs.subtitleStyle)) delete data.prefs.subtitleStyle;
+        if (split.prefs.subtitleStyle && isDefaultSubtitleStyle(split.prefs.subtitleStyle)) delete data.prefs.subtitleStyle;
       });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
