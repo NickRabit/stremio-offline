@@ -640,6 +640,9 @@ test("PATCH /api/settings writes nothing when the saved style and a repeated res
 
   const same = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyle: style } });
   assert.equal(same.status, 200);
+  const reversed = Object.fromEntries(Object.entries(style).reverse());
+  const sameReversed = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyle: reversed } });
+  assert.equal(sameReversed.status, 200);
   const cleared = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyleHdr: null } });
   assert.equal(cleared.status, 200);
   assert.equal(persisted(), before);

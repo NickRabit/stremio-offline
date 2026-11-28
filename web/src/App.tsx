@@ -3,7 +3,7 @@ import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
-import { mergeSettings } from "./settings-merge";
+import { loadedSettings, mergeSettings, revertSettings, withoutAccountSettings } from "./settings-merge";
 import { api, ApiError, ChildRefusedError, describeError, saveToDevice } from "./api";
 import { childViewAllowed, setChildSession } from "./child-policy";
 import { ChildModeProvider } from "./child-mode";
@@ -1649,6 +1649,7 @@ export function App() {
   useEffect(() => {
     // A fresh sign-in re-arms the start page: signing out again must not remember the last
     // switch as if the person had navigated.
+    setSettings(withoutAccountSettings);
     if (!ready) { navigated.current = false; return; }
     const loaded = child && !childCatalogue
       ? Promise.resolve(null)
@@ -1658,7 +1659,7 @@ export function App() {
       // Remembered here as well as in the effect: an answer equal to the defaults changes
       // nothing the effect watches, and would otherwise never be kept. The rows are shown in
       // the same render that applies the size.
-      setSettings((current: AppSettings) => { const merged = { ...current, ...next }; rememberLayout(merged); return merged; });
+      setSettings((current: AppSettings) => { const merged = loadedSettings(current, next); rememberLayout(merged); return merged; });
       setTilesKnown(true);
       setLocale(next.uiLanguage);
       // An install with no catalogue yet keeps its first run on the catalogue's onboarding.
@@ -1693,7 +1694,7 @@ export function App() {
    *  back as Balanced in the settings. */
   const reloadSourceRules = () => {
     if (!child || childCatalogue) api.sourceProfiles().then(setSourceProfiles).catch(() => undefined);
-    api.settings().then((next) => setSettings((current: AppSettings) => ({ ...current, ...next }))).catch(() => undefined);
+    api.settings().then((next) => setSettings((current: AppSettings) => loadedSettings(current, next))).catch(() => undefined);
   };
   // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => {
@@ -1727,8 +1728,17 @@ export function App() {
     // may carry it on from before.
     const optimistic = { ...rest } as Partial<AppSettings>;
     for (const key of ["homeLayout", "subtitleStyle", "subtitleStyleHdr"] as const) if (rest[key] === null) delete optimistic[key];
-    if (Object.keys(rest).length) setSettings((current: AppSettings) => mergeSettings(current, optimistic, rest));
-    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => mergeSettings(current, saved, rest)); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
+    const keys = Object.keys(rest) as (keyof AppSettings)[];
+    let before: Partial<AppSettings> = {};
+    let attempted: Partial<AppSettings> = {};
+    if (keys.length) setSettings((current: AppSettings) => {
+      before = Object.fromEntries(keys.map((key) => [key, current[key]])) as Partial<AppSettings>;
+      const next = mergeSettings(current, optimistic, rest);
+      attempted = Object.fromEntries(keys.map((key) => [key, next[key]])) as Partial<AppSettings>;
+      return next;
+    });
+    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => mergeSettings(current, saved, rest)); rememberChosenStartView(saved.startView); notify(t("settings.saved")); }
+    catch (e) { setSettings((current: AppSettings) => revertSettings(current, before, attempted, keys)); fail(e); }
   };
   const rememberSourceProfile = async (downloadSourceProfile: string | null) => {
     const saved = await api.updateSettings({ downloadSourceProfile });

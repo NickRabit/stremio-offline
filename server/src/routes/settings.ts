@@ -37,7 +37,7 @@ import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
 import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
-import { DEFAULT_SUBTITLE_STYLE, isDefaultSubtitleStyle, isSubtitleStyle, type SubtitleStyle } from "../subtitle-style.js";
+import { DEFAULT_SUBTITLE_STYLE, canonicalSubtitleStyle, isDefaultSubtitleStyle, isSubtitleStyle, type SubtitleStyle } from "../subtitle-style.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
 export interface SettingsDeps extends RouteContext {
@@ -566,11 +566,11 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.hideSpoilers !== undefined) prefs.hideSpoilers = Boolean(req.body.hideSpoilers);
       if (subtitleStyle !== undefined) {
         if (subtitleStyle === null) delete prefs.subtitleStyle;
-        else prefs.subtitleStyle = { ...(subtitleStyle as SubtitleStyle) };
+        else prefs.subtitleStyle = canonicalSubtitleStyle(subtitleStyle as SubtitleStyle);
       }
       if (subtitleStyleHdr !== undefined) {
         if (subtitleStyleHdr === null) delete prefs.subtitleStyleHdr;
-        else prefs.subtitleStyleHdr = { ...(subtitleStyleHdr as SubtitleStyle) };
+        else prefs.subtitleStyleHdr = canonicalSubtitleStyle(subtitleStyleHdr as SubtitleStyle);
       }
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);

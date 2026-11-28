@@ -1915,7 +1915,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else if (event.key === ",") { event.preventDefault(); nudgeSubtitlesRef.current(-SUBTITLE_DELAY_STEP_S); }
       else if (event.key === ".") { event.preventDefault(); nudgeSubtitlesRef.current(SUBTITLE_DELAY_STEP_S); }
       else if (event.key === "f") void toggleFullscreen();
-      else if (event.key === "p") {
+      else if (event.key === "p" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         const video = videoRef.current;
         if (video && pictureInPictureSupported(video)) { event.preventDefault(); togglePip(); }
       }

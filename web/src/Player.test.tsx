@@ -2680,4 +2680,17 @@ describe("Player picture in picture", () => {
     await pressKey("p");
     expect(exitPip).toHaveBeenCalledOnce();
   });
+
+  it("leaves Ctrl+P and Cmd+P to the browser", async () => {
+    stubPip();
+    await render();
+    await settle();
+    await loadMetadata();
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      const event = new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true, ...modifier });
+      await act(async () => { document.dispatchEvent(event); });
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(requestPictureInPicture).not.toHaveBeenCalled();
+  });
 });

@@ -63,3 +63,9 @@ export function isSubtitleStyle(value: unknown): value is SubtitleStyle {
 
 export const isDefaultSubtitleStyle = (style: SubtitleStyle): boolean =>
   (Object.keys(DEFAULT_SUBTITLE_STYLE) as (keyof SubtitleStyle)[]).every((key) => style[key] === DEFAULT_SUBTITLE_STYLE[key]);
+
+/** The style with its fields in one fixed order, so equal styles serialise equally. */
+export const canonicalSubtitleStyle = (style: SubtitleStyle): SubtitleStyle => ({
+  size: style.size, color: style.color, textOpacity: style.textOpacity, background: style.background,
+  backgroundOpacity: style.backgroundOpacity, edge: style.edge, position: style.position,
+});
