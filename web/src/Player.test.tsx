@@ -2404,3 +2404,189 @@ describe("Player final source identity", () => {
     ]);
   });
 });
+
+describe("Player picture in picture", () => {
+  let pipElement: Element | null;
+  let requestPictureInPicture: ReturnType<typeof vi.fn>;
+  let exitPip: ReturnType<typeof vi.fn>;
+  let fakeTrack: { mode: string; activeCues: null; addEventListener: () => void; removeEventListener: () => void };
+
+  const originalEnabled = Object.getOwnPropertyDescriptor(document, "pictureInPictureEnabled");
+  const originalElement = Object.getOwnPropertyDescriptor(document, "pictureInPictureElement");
+  const originalExit = Object.getOwnPropertyDescriptor(document, "exitPictureInPicture");
+  const originalRequest = Object.getOwnPropertyDescriptor(HTMLVideoElement.prototype, "requestPictureInPicture");
+
+  const restorePip = () => {
+    if (originalEnabled) Object.defineProperty(document, "pictureInPictureEnabled", originalEnabled);
+    else Reflect.deleteProperty(document, "pictureInPictureEnabled");
+    if (originalElement) Object.defineProperty(document, "pictureInPictureElement", originalElement);
+    else Reflect.deleteProperty(document, "pictureInPictureElement");
+    if (originalExit) Object.defineProperty(document, "exitPictureInPicture", originalExit);
+    else Reflect.deleteProperty(document, "exitPictureInPicture");
+    if (originalRequest) Object.defineProperty(HTMLVideoElement.prototype, "requestPictureInPicture", originalRequest);
+    else Reflect.deleteProperty(HTMLVideoElement.prototype, "requestPictureInPicture");
+  };
+
+  const stubPip = (options?: { reject?: boolean }) => {
+    pipElement = null;
+    requestPictureInPicture = vi.fn(function (this: HTMLVideoElement) {
+      if (options?.reject) return Promise.reject(Object.assign(new Error("refused"), { name: "NotAllowedError" }));
+      pipElement = this;
+      this.dispatchEvent(new Event("enterpictureinpicture"));
+      return Promise.resolve({});
+    });
+    exitPip = vi.fn(() => {
+      const current = pipElement;
+      pipElement = null;
+      if (current instanceof HTMLVideoElement) current.dispatchEvent(new Event("leavepictureinpicture"));
+      return Promise.resolve();
+    });
+    Object.defineProperty(document, "pictureInPictureEnabled", { configurable: true, get: () => true });
+    Object.defineProperty(document, "pictureInPictureElement", { configurable: true, get: () => pipElement });
+    Object.defineProperty(document, "exitPictureInPicture", { configurable: true, value: exitPip });
+    Object.defineProperty(HTMLVideoElement.prototype, "requestPictureInPicture", { configurable: true, value: requestPictureInPicture });
+  };
+
+  const stubTracks = () => {
+    fakeTrack = { mode: "showing", activeCues: null, addEventListener() {}, removeEventListener() {} };
+    Object.defineProperty(HTMLTrackElement.prototype, "track", { configurable: true, get: () => fakeTrack });
+    Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+      configurable: true,
+      get: () => Object.assign([fakeTrack], {
+        length: 1,
+        addEventListener() {},
+        removeEventListener() {},
+        item: (i: number) => (i === 0 ? fakeTrack : null),
+      }),
+    });
+  };
+
+  const loadMetadata = async () => {
+    const video = host.querySelector<HTMLVideoElement>("video")!;
+    Object.defineProperty(video, "readyState", { configurable: true, get: () => 1 });
+    await act(async () => { video.dispatchEvent(new Event("loadedmetadata")); });
+    await flush();
+    return video;
+  };
+
+  const pressKey = async (key: string) => {
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+    await flush();
+  };
+
+  afterEach(restorePip);
+
+  it("hides the button when unsupported", async () => {
+    await render();
+    await settle();
+    await loadMetadata();
+    expect(host.querySelector(".player-pip-toggle")).toBeNull();
+  });
+
+  it("shows the button when supported and metadata has loaded", async () => {
+    stubPip();
+    await render();
+    await settle();
+    expect(host.querySelector(".player-pip-toggle")).toBeNull();
+    await loadMetadata();
+    const button = host.querySelector<HTMLButtonElement>(".player-pip-toggle");
+    expect(button).not.toBeNull();
+    expect(button!.getAttribute("aria-label")).toBe("Picture in picture (P)");
+    expect(button!.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("switches mirrored tracks to the native renderer in picture in picture and back", async () => {
+    stubPip();
+    stubTracks();
+    await render();
+    await settle();
+    await loadMetadata();
+    expect(fakeTrack.mode).toBe("hidden");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(false);
+
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(requestPictureInPicture).toHaveBeenCalledOnce();
+    expect(fakeTrack.mode).toBe("showing");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(true);
+    expect(host.querySelector(".player-pip-toggle")!.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector(".player-pip-toggle")!.getAttribute("aria-label")).toBe("Leave picture in picture (P)");
+
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(exitPip).toHaveBeenCalledOnce();
+    expect(fakeTrack.mode).toBe("hidden");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(false);
+  });
+
+  it("keeps tracks hidden when subtitles were switched off before entering", async () => {
+    stubPip();
+    stubTracks();
+    await render();
+    await settle();
+    await loadMetadata();
+    await pressKey("c");
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(fakeTrack.mode).toBe("hidden");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(true);
+  });
+
+  it("keeps native mode when the subtitle track changes during picture in picture", async () => {
+    stubPip();
+    stubTracks();
+    await render({
+      subtitles: [{ subtitleId: "sub-en", lang: "en" }, { subtitleId: "sub-cs", lang: "cs" }],
+      subtitleLanguage: "en",
+    });
+    await settle();
+    await loadMetadata();
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(fakeTrack.mode).toBe("showing");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(true);
+
+    await openSettings();
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Subtitles"]')!;
+    await act(async () => {
+      select.value = "addon:1";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await settle();
+    expect(fakeTrack.mode).toBe("showing");
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(true);
+  });
+
+  it("leaves tracks hidden and the overlay usable when the request is refused", async () => {
+    stubPip({ reject: true });
+    stubTracks();
+    await render();
+    await settle();
+    await loadMetadata();
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(fakeTrack.mode).toBe("hidden");
+    expect(host.querySelector(".player-overlay")).not.toBeNull();
+    expect(host.querySelector(".player-overlay")!.classList.contains("native-subtitles")).toBe(false);
+    expect(host.querySelector(".player-pip-toggle")!.getAttribute("aria-pressed")).toBe("false");
+    expect(clientLogs.some((entry) => entry.level === "WARN" && entry.message === "Picture in picture refused")).toBe(true);
+  });
+
+  it("exits picture in picture when the player is closed", async () => {
+    stubPip();
+    await render();
+    await settle();
+    await loadMetadata();
+    await click(host.querySelector(".player-pip-toggle")!);
+    expect(pipElement).not.toBeNull();
+    await click(host.querySelector('[aria-label="Close player"]')!);
+    expect(exitPip).toHaveBeenCalledOnce();
+  });
+
+  it("toggles picture in picture with p", async () => {
+    stubPip();
+    await render();
+    await settle();
+    await loadMetadata();
+    await pressKey("p");
+    expect(requestPictureInPicture).toHaveBeenCalledOnce();
+    expect(host.querySelector(".player-pip-toggle")!.getAttribute("aria-pressed")).toBe("true");
+    await pressKey("p");
+    expect(exitPip).toHaveBeenCalledOnce();
+  });
+});

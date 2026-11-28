@@ -1,7 +1,8 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
+import { exitPictureInPicture, inPictureInPicture, nativeVideoPresentation, pictureInPictureSupported, togglePictureInPicture } from "./player-presentation";
 import type Hls from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, ChevronDown, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, ChevronDown, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, PictureInPicture2, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, guardChildRequest, subtitleUrl } from "./api";
 import { useChildMode } from "./child-mode";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
@@ -225,16 +226,8 @@ const MODE_KEY: Record<PlaybackMode, Key> = {
   transcode: "player.mode.transcode",
 };
 
-/** Overlay fullscreen keeps the HTML cue layer. Native cues are only for the
- *  video element's own fullscreen (iOS), where those siblings are not shown. */
-const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | null) => {
-  if (document.fullscreenElement === overlay) return false;
-  const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
-  return document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen);
-};
-
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
-const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f", "<", ">"]);
+const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f", "p", "<", ">"]);
 const SHORT_END_RESTARTS = 3;
 const SHORT_END_PROGRESS_S = 60;
 const PAUSED_REPORT_MS = 15_000;
@@ -500,6 +493,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [seekKept, setSeekKept] = useState(false);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
+  const [pip, setPip] = useState(false);
+  const [pipAvailable, setPipAvailable] = useState(false);
+  const [phonePortrait, setPhonePortrait] = useState(() => window.matchMedia("(max-width: 700px) and (orientation: portrait)").matches);
   // Hiding subtitles must not touch the session: switching the track on the server
   // restarts FFmpeg and waits for new segments. Only the rendering changes here, so the
   // track keeps running and comes back instantly.
@@ -633,9 +629,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       syncTrackModes();
       showActiveCues();
     };
-    const updateFullscreenMode = () => {
-      useNativeRenderer = nativeVideoFullscreen(video, overlayRef.current);
+    const updatePresentationMode = () => {
+      useNativeRenderer = nativeVideoPresentation(video, overlayRef.current);
       setNativeSubtitles(useNativeRenderer);
+      setPip(inPictureInPicture(video));
       bindTracks();
       cancelAnimationFrame(fullscreenSync);
       fullscreenSync = requestAnimationFrame(() => bindTracks());
@@ -646,18 +643,25 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     video.textTracks.addEventListener("addtrack", bindTracks);
     video.textTracks.addEventListener("change", bindTracks);
     video.addEventListener("loadedmetadata", bindTracks);
-    document.addEventListener("fullscreenchange", updateFullscreenMode);
-    video.addEventListener("webkitbeginfullscreen", updateFullscreenMode);
-    video.addEventListener("webkitendfullscreen", updateFullscreenMode);
+    document.addEventListener("fullscreenchange", updatePresentationMode);
+    video.addEventListener("webkitbeginfullscreen", updatePresentationMode);
+    video.addEventListener("webkitendfullscreen", updatePresentationMode);
+    video.addEventListener("enterpictureinpicture", updatePresentationMode);
+    video.addEventListener("leavepictureinpicture", updatePresentationMode);
+    video.addEventListener("webkitpresentationmodechanged", updatePresentationMode);
+    updatePresentationMode();
     return () => {
       cancelAnimationFrame(fullscreenSync);
       applySubtitleVisibilityRef.current = null;
       video.textTracks.removeEventListener("addtrack", bindTracks);
       video.textTracks.removeEventListener("change", bindTracks);
       video.removeEventListener("loadedmetadata", bindTracks);
-      document.removeEventListener("fullscreenchange", updateFullscreenMode);
-      video.removeEventListener("webkitbeginfullscreen", updateFullscreenMode);
-      video.removeEventListener("webkitendfullscreen", updateFullscreenMode);
+      document.removeEventListener("fullscreenchange", updatePresentationMode);
+      video.removeEventListener("webkitbeginfullscreen", updatePresentationMode);
+      video.removeEventListener("webkitendfullscreen", updatePresentationMode);
+      video.removeEventListener("enterpictureinpicture", updatePresentationMode);
+      video.removeEventListener("leavepictureinpicture", updatePresentationMode);
+      video.removeEventListener("webkitpresentationmodechanged", updatePresentationMode);
       for (const [track, listener] of bound) track.removeEventListener("cuechange", listener);
       for (const track of mirrored) if (track.mode === "hidden") track.mode = "showing";
       setSubtitleText("");
@@ -669,6 +673,43 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     subtitlesHiddenRef.current = subtitlesHidden;
     applySubtitleVisibilityRef.current?.();
   }, [subtitlesHidden]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 700px) and (orientation: portrait)");
+    const update = () => setPhonePortrait(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!open) { setPip(false); setPipAvailable(false); return; }
+    const video = videoRef.current;
+    if (!video) return;
+    const sync = () => {
+      setPipAvailable(pictureInPictureSupported(video) && video.readyState >= 1);
+      setPip(inPictureInPicture(video));
+    };
+    sync();
+    video.addEventListener("loadedmetadata", sync);
+    video.addEventListener("enterpictureinpicture", sync);
+    video.addEventListener("leavepictureinpicture", sync);
+    video.addEventListener("webkitpresentationmodechanged", sync);
+    return () => {
+      video.removeEventListener("loadedmetadata", sync);
+      video.removeEventListener("enterpictureinpicture", sync);
+      video.removeEventListener("leavepictureinpicture", sync);
+      video.removeEventListener("webkitpresentationmodechanged", sync);
+    };
+  }, [open, session?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    return () => {
+      if (video && document.pictureInPictureElement === video) void exitPictureInPicture(video).catch(() => undefined);
+    };
+  }, [open]);
 
   const detach = () => {
     attachSeqRef.current += 1;
@@ -1645,6 +1686,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
+  const togglePip = () => {
+    const video = videoRef.current;
+    if (!video || !pictureInPictureSupported(video)) return;
+    void togglePictureInPicture(video).then(() => {
+      if (playerIsFullscreen(overlayRef.current)) return exitPlayerFullscreen();
+    }).catch((error: unknown) => {
+      report("WARN", "Picture in picture refused", { name: error instanceof Error ? error.name : "Error" });
+    });
+  };
+
   // A rotation carries no user activation, so a fullscreen request made straight from the
   // orientation handler is rejected. The first touch after the rotation does carry one, and that
   // is when the overlay claims the screen. iPhone Safari exposes no Fullscreen API for elements
@@ -1766,7 +1817,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const closePlayer = () => {
-    videoRef.current?.pause();
+    const video = videoRef.current;
+    if (video && inPictureInPicture(video)) void exitPictureInPicture(video).catch(() => undefined);
+    video?.pause();
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
 
@@ -1858,6 +1911,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else if (event.key === ",") { event.preventDefault(); nudgeSubtitlesRef.current(-SUBTITLE_DELAY_STEP_S); }
       else if (event.key === ".") { event.preventDefault(); nudgeSubtitlesRef.current(SUBTITLE_DELAY_STEP_S); }
       else if (event.key === "f") void toggleFullscreen();
+      else if (event.key === "p") {
+        const video = videoRef.current;
+        if (video && pictureInPictureSupported(video)) { event.preventDefault(); togglePip(); }
+      }
       else if (event.key === "Escape" && !document.fullscreenElement) closePlayer();
     };
     window.addEventListener("keydown", onKey);
@@ -1880,6 +1937,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const subtitleValue = session?.subtitleTrack !== null && session?.subtitleTrack !== undefined
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
+  const pipLabel = t(pip ? "player.exitPictureInPicture" : "player.pictureInPicture");
 
   return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
@@ -2042,6 +2100,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <div className="player-view-controls">
           <button className="player-fill-toggle" aria-label={t("player.fillScreen")} title={t("player.fillScreen")} aria-pressed={pictureFilled} onClick={() => setPictureFilled(!pictureFilled)}><RectangleHorizontal /></button>
           {sources && <button className="player-action player-sources-toggle" aria-label={t("sources.heading")} title={t("sources.heading")} aria-expanded={sourcesOpen} aria-controls="player-sources" onClick={() => sourcesOpen ? setSourcesOpen(false) : openSources()}><ListVideo /> <span>{t("sources.heading")}</span></button>}
+          {pipAvailable && !phonePortrait && <button className="player-pip-toggle" aria-label={pipLabel} title={pipLabel} aria-pressed={pip} onClick={togglePip}><PictureInPicture2 /></button>}
           <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
           {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
         </div>
@@ -2060,6 +2119,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     </div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
+      {pipAvailable && phonePortrait && <button className="player-pip-row" aria-label={pipLabel} title={pipLabel} aria-pressed={pip} onClick={togglePip}><PictureInPicture2 /> {t("player.pictureInPictureRow")}</button>}
       {session && <label className="track-picker" title={t("player.quality")}>
         <SlidersHorizontal />
         <select aria-label={t("player.quality")} value={session.quality ?? "original"}
