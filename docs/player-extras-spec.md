@@ -15,7 +15,7 @@ This decides how all three features are designed.
 
 - The `<track>` elements are attached to the `<video>`
   (`web/src/Player.tsx:1941-1943`). An effect (`Player.tsx:556-638`) keeps
-  every track in `mode = "hidden"` and copies the active cues into React state
+  each mirrored track in `mode = "hidden"` and copies the active cues into React state
   (`showActiveCues`, `Player.tsx:571-583`). That state renders as
   `<div className="player-subtitles">` (`Player.tsx:1945`).
 - The text is read with `getCueAsHTML().textContent` (`Player.tsx:578`). This
@@ -53,15 +53,17 @@ the overlay was built to avoid.
 - **Not affected by speed.** Progress, resume and statistics are
   position-based or traffic-based (`player-progress.ts:11-18`,
   `server/src/stats.ts`). The Up next countdown is five seconds of wall time,
-  which is correct at any speed. Segment auto-skip and the Up next trigger fire
-  on a position crossing (`Player.tsx:1883-1896`), so the larger jumps at 2×
-  still trigger them.
+  which is correct at any speed. Up next detects a threshold crossing. Intro and recap
+  auto-skip also require the sampled position to fall inside the segment
+  (`activeSegment` in `player-segments.ts`, `Player.tsx:1883-1896`). A
+  time update can jump over a short segment at 2×.
 - **Conversion limit (the important one).** FFmpeg reads with `-readrate 3`
   for a remux and `-readrate 1.5` for a transcode
   (`server/src/playback.ts:2081`; overridable with `FFMPEG_READRATE[_REMUX]`).
-  After the 30-second initial burst, a transcode cannot keep up above 1.5×
-  and will stall repeatedly. A remux keeps up to about 3×. Direct play is
-  unaffected.
+  The default initial burst is 30 seconds of input on supported FFmpeg builds.
+  Once buffered content runs out, sustained playback above the configured
+  read rate can stall. Encoding or I/O can limit throughput earlier. Direct
+  play bypasses this FFmpeg limit.
 - **Buffers are counted in content seconds.** At 2× each covers half as much
   wall time: hls.js `maxBufferLength: 25` (`player-hls.ts:5-16`), the
   optional lead cap (`playback.ts:500-511`) and the 45-second subtitle
@@ -75,7 +77,7 @@ the overlay was built to avoid.
 ### Design
 
 - **Steps.** 0.5, 0.75, 1, 1.25, 1.5, 1.75 and 2×. Nothing above 2×.
-- **Applying it.** A pure `applySpeed(video, speed)` sets both
+- **Applying it.** A helper `applySpeed(video, speed)` sets both
   `defaultPlaybackRate` and `playbackRate`. It runs on change and again on
   `loadedmetadata`, so every reload path keeps the speed. It also sets
   `preservesPitch = true` (and `webkitPreservesPitch`). Pitch preservation
@@ -103,19 +105,20 @@ in the tracks or quality panel, strings through `android-tv/strings.keys`, and
 the speed passed to `PlayerClock`.
 
 **Catch [unverified]:** while audio passthrough sends AC-3, E-AC-3 or DTS as a
-bitstream, the sink cannot change speed. The row must then be disabled with a
-short reason. Check on the Android 9 Philips set.
+bitstream, the sink cannot change speed. Check on the Android 9 Philips set whether Media3 changes
+the output path or declines the rate. Show the effective speed in the clock and
+controls. Gate the row only on a confirmed playback limitation.
 
 ### Tests
 
 - **Unit:**
   - `endsAt` with a speed.
   - `applySpeed` writes both rate fields.
-  - Stored speed is clamped (like `player-volume.test.ts`).
+  - Restore each supported speed. Missing, malformed or unsupported values use 1×.
 - **Playwright:**
   - The speed survives a seek restart and a quality change, checked by
-    asserting `video.playbackRate` afterwards. This test must fail without the
-    `defaultPlaybackRate` fix.
+    asserting `video.playbackRate` after playback resumes on the new source. The
+    unit test covers the two rate fields independently.
   - Ends at follows the speed.
   - `<` and `>` change the speed while `,` and `.` still move the subtitle
     timing.
@@ -159,19 +162,27 @@ Size: web **S**, TV **S–M**.
   - A button in `player-view-controls` (`Player.tsx:1982-1987`). It is shown
     only when `document.pictureInPictureEnabled` or
     `webkitSupportsPresentationMode("picture-in-picture")` is true.
-  - Key `p`. Entering PiP leaves overlay fullscreen first.
+  - The button and `p` toggle the current video's PiP mode. Enable entry
+    after video metadata is available and call the supported API directly
+    from the user gesture. On success, leave overlay fullscreen if still
+    active. On rejection, keep the current presentation and subtitle state.
+    [W3C Picture-in-Picture request algorithm](https://www.w3.org/TR/picture-in-picture/#request-pip)
   - `nativeVideoFullscreen` grows into `nativeVideoPresentation`, which also
     listens to `enterpictureinpicture`, `leavepictureinpicture` and
     `webkitpresentationmodechanged` in the existing effect
-    (`Player.tsx:609-624`). Tracks switch to `"showing"` during PiP. That
-    gives subtitles on Safari and Firefox; on Chromium and Electron the
-    tooltip says subtitles are not shown in PiP.
+    (`Player.tsx:609-624`). Read the current presentation at effect setup
+    and on each event. Changing the session or addon track rebinds the effect
+    while the video may already be in PiP. In native presentation, show only
+    mirrored tracks when the viewer has subtitles enabled. Restore the overlay
+    on exit. Confirm cue visibility on each platform before adding any
+    platform-specific tooltip.
   - Closing the player exits PiP.
 - **v2: Document PiP on Chromium (M, spike first).** Move the existing host
   node (the video plus `.player-subtitles`) into the PiP window, keeping the
   same element so playback continues. Move it back on the window's `pagehide`
-  before React unmounts it. This gives subtitles and their styling, but it
-  works around React's DOM ownership.
+  before React unmounts it. The spike must also bring the player styles and inherited CSS
+  variables into the new document. Verify cue updates, resize, close and
+  parent unmount with React still owning the host.
 - **v3: PiP while browsing the app (L).** Keep the Player mounted and hidden
   while PiP is active. This touches App's `playerOpen`, the focus trap,
   progress reporting, Up next and the session watchdogs.
@@ -182,14 +193,17 @@ Size: web **S**, TV **S–M**.
   - Element reloads after a quality, track or seek change may drop PiP
     **[verify]**.
   - Up next and the end-of-playback close would close a PiP window.
-  - When the user closes the PiP window, Chrome pauses the video; `onPause`
-    already copes.
+  - Check both pause and continued playback when the viewer closes the PiP
+    window. Keep the controls in sync with the media element.
   - The desktop display guard must still see the media playing.
 - **Unit:** the presentation-mode helper.
 - **Playwright** (stub the API if headless Chromium lacks it):
   - The button appears only with support.
   - Entering PiP turns the mirrored track to `"showing"`, and leaving turns it
     back.
+  - A track change in PiP retains native mode. Subtitles switched off stay
+    off across entry, track changes and exit. A rejected request leaves the
+    overlay usable.
   - Closing the player exits PiP.
 - **Manual:**
   - Safari on Mac and iPhone (HLS and remux).
@@ -228,8 +242,12 @@ Size: web **S**, TV **S–M**.
 - **Per-account preferences:**
   - Stored in `UserPrefs` (`server/src/store.ts:100-130`) and listed in
     `PERSONAL_SETTINGS` (`server/src/users.ts:287-298`).
-  - Split by `splitSettings` (`routes/settings.ts:228-250`) and written by the
-    PATCH handler (`:500-545`). The backup covers them (`backup.ts:157`).
+  - Export includes the exporting account’s preferences. Import rebuilds an
+    explicit field list in `parseSettings` (`server/src/backup.ts`) before
+    `splitSettings` in `routes/settings.ts` assigns personal keys to that
+    account. Add both style keys in both places. Import merges preferences.
+    Restoring a backup of an account with an inherited HDR style must clear
+    any HDR override currently on the importing account.
   - `GET` and `PATCH /settings` are already open to users
     (`server/src/roles.ts:145`, `175`). **No new route and no `USER_ALLOWED`
     change is needed.**
@@ -251,25 +269,33 @@ interface SubtitleStyle {
   edge: "shadow" | "outline" | "none";
   position: 0 | 5 | 10 | 15 | 20;                         // % lift from the bottom
 }
-prefs.subtitleStyle?: SubtitleStyle;     // absent = today's look
-prefs.subtitleStyleHdr?: SubtitleStyle;  // absent = same as subtitleStyle
+interface SubtitlePreferences {
+  subtitleStyle?: SubtitleStyle;
+  subtitleStyleHdr?: SubtitleStyle;
+}
 ```
 
-A server-side `normalizeSubtitleStyle` clamps or rejects unknown values. A
-PATCH writes only the keys sent and nothing when the value is unchanged, in
-line with the NAS disk-write rule.
+For each top-level style key, omission in PATCH preserves its value, a complete
+preset object replaces it, and `null` removes the override. Validate the entire
+request before writing. Reject malformed objects and unsupported presets with
+HTTP 400. Compare validated fields inside the serialized store update. A
+style-only request with identical values returns `false` from the mutator
+to skip the redundant save. Mixed requests still apply other changes.
 
 ### Web
 
 - **Player:**
-  - It chooses `subtitleStyleHdr` when `session.playing.hdr` is set.
+  - For HDR playback, resolve `subtitleStyleHdr ?? subtitleStyle`. For SDR
+    or unknown HDR status, use `subtitleStyle`. When the selected style is
+    absent, use the existing renderer defaults on both clients.
   - It sets CSS variables on `.player-overlay`: `--sub-scale`, `--sub-color`,
     `--sub-bg`, `--sub-shadow` and `--sub-lift`. The existing rules at
     `style.css:195`, `863-864`, `900` and the phone rule consume them.
   - `background: line` needs each line in its own span with
     `box-decoration-break: clone`, so `subtitleText` is split on line breaks.
-  - The same values go into a `video::cue` rule for the native paths. iOS
-    system caption settings may override them **[unverified]**.
+  - Apply supported text styles through `video::cue` in native presentation.
+    Keep the HTML overlay responsible for layout and vertical lift. Check
+    native cue placement and system caption overrides on a device.
 - **Settings:**
   - A new section, *Subtitle appearance*, under Settings → Playback
     (`SettingsPage.tsx:339-360`).
@@ -277,12 +303,12 @@ line with the NAS disk-write rule.
     [UI conventions](ui-conventions.md).
   - A live preview: a 16:9 box with a sample line drawn by the same component
     and variables as the player, with an SDR/HDR switch.
-  - One PATCH per change.
+  - One PATCH per change. Offer a reset for each profile. Resetting the HDR
+    profile resumes inheritance, including subsequent base-style edits.
   - Check the section in the viewport matrix, including phones upright and
     sideways.
-- **HDR on the web:** in browsers CSS white is SDR reference white, so the
-  "blinding" complaint matters mostly on the TV. The HDR style is still offered
-  on both clients.
+- **HDR preview:** the switch selects the HDR preference. Assess perceived
+  brightness during HDR playback on a supported display.
 
 ### Android TV
 
@@ -292,12 +318,14 @@ line with the NAS disk-write rule.
 - **Media3 renderer:**
   `subtitleView.setStyle(CaptionStyleCompat(...))`,
   `setFractionalTextSize`, `setBottomPaddingFraction`,
-  `setApplyEmbeddedStyles(false)` and `setApplyEmbeddedFontSizes(false)`, so
-  the user's style beats ASS styling (Q5).
+  and embedded-style controls apply only for an effective custom style. If
+  Q5 selects user precedence, disable embedded styles and font sizes while
+  that style is active. On reset or a switch to an unstyled title, restore
+  the original Media3 settings on the existing view.
 - **Settings:**
   - Read from `/api/settings`, which the TV already loads.
-  - Written with a new structured `updateSubtitleStyle` call; today
-    `updateSettingFlag`, `data/ApiClient.kt:387`, writes only booleans.
+  - Model the structured write on `updateHomeLayout` in `data/ApiClient.kt`,
+    which already sends an object or null.
   - A *Subtitles* screen with the same presets and a preview line.
 - **Strings:** through `android-tv/strings.keys`, never by hand in `res`. Run
   `lintDebug` before pushing.
@@ -322,15 +350,19 @@ appear in native PiP either.
   - A backup import must round-trip the nested object.
   - The default must render exactly as today.
 - **Unit:**
-  - Server: normalisation and clamping, PATCH writes only what changed,
-    `splitSettings` round-trip, a child account gets 403.
+  - Server: test replacement, omission, reset and rejection of an invalid preset. Check a repeated
+    PATCH skips persistence and another account keeps its own style. Exercise
+    export → parse → import → GET for both profiles and import a legacy backup
+    without style keys. A child account gets 403 on PATCH.
   - Web: style → CSS variables, and choosing the HDR style from
     `playing.hdr`.
   - TV: preset → Compose and `CaptionStyleCompat` mapping (JVM tests).
+    Exercise custom → absent on the same PlayerView with embedded ASS.
 - **Playwright** (extend `player-subtitles.spec.ts` and
   `player-embedded-subtitles.spec.ts`):
   - The computed style of `.player-subtitles` follows the saved preference.
-  - The HDR style applies when the fixture session reports `hdr`.
+  - An HDR fixture uses its override, inherits the base style after reset,
+    and falls back to the current appearance when both keys are absent.
   - The Settings preview changes live.
   - A layout invariant for the new section.
   - Snapshots go through the update-snapshots workflow.
@@ -343,8 +375,7 @@ Size: server + web **M**, TV **M**.
 
 ## 4. Order and PR boundaries
 
-Every item edits `Player.tsx` (2,074 lines), so the PRs land one after another,
-never in parallel.
+The first three PRs share `Player.tsx`. Land those changes in sequence.
 
 1. Speed on the web (S).
 2. PiP v1 (S–M). It introduces `nativeVideoPresentation`, which step 3 reuses
@@ -365,7 +396,7 @@ checks those paths with care.
    the player opens?
 2. **Transcode above 1.5×:** a stall hint only, or should the server raise its
    read rate for that session (more NAS reads)?
-3. **PiP scope:** v1 only (no subtitles in PiP on Chromium), also Document PiP
+3. **PiP scope:** native video PiP only (cue support to verify), also Document PiP
    (subtitles on Chromium), or watching while browsing the app?
 4. **Child accounts:** today's default style, or let an administrator set a
    child's style in the user manager?
