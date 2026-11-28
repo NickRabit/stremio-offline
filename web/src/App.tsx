@@ -1726,6 +1726,8 @@ export function App() {
     // key rather than carry a `null` the `Settings` shape does not allow.
     const optimistic = { ...rest } as Partial<AppSettings>;
     if (optimistic.homeLayout === null) delete optimistic.homeLayout;
+    if (optimistic.subtitleStyle === null) delete optimistic.subtitleStyle;
+    if (optimistic.subtitleStyleHdr === null) delete optimistic.subtitleStyleHdr;
     if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
     try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
@@ -4388,7 +4390,7 @@ export function App() {
       onClose={() => setAvatarPickerOpen(false)}
     />}
     <ViewBoundary resetKey={playerOpen ? `open:${playerStreamKey}` : "closed"} {...(playerOpen ? { onClose: stopPlayback } : {})}>
-    <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
+    <Player nextTitle={playerNextTitle} nextBusy={nextBusy} onNext={playerOnNext} autoNext={playerAutoNext} previousTitle={playerPreviousTitle} onPrevious={playerOnPrevious} open={playerOpen} title={localStream ? localTitle : detailPlaying ? detailPlaying.title : playerSubject?.title || localTitle} stream={localStream ?? detailPlaying?.stream ?? selectedStream} subtitles={localStream ? fileSubtitles : detailPlaying ? detailPlaying.subtitles : subtitles} subtitleLanguage={settings.subtitleLanguage} audioLanguage={settings.audioLanguage} subtitleStyle={settings.subtitleStyle} subtitleStyleHdr={settings.subtitleStyleHdr} upNextAt={settings.upNextAt} skipSegmentsAuto={settings.skipSegmentsAuto} shuffle={shuffleActive} onPreferences={setPlaybackPreferences}
       catalogueKey={localStream && playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : detailPlaying ? `${detailPlaying.target.type}:${catalogueStreamId(detailPlaying.target)}` : playerSubject?.key ?? (playingCatalogue ? `${playingCatalogue.type}:${playingCatalogue.id}` : undefined)}
       progressPoster={localStream ? localPoster : detailPlaying ? detailPlaying.target.poster : playerSubject?.poster ?? localPoster}

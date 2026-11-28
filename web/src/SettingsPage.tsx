@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, ListFilter, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { Captions, Check, ChevronRight, CirclePlay, Download, FileJson, HardDrive, Heart, KeyRound, Languages, Library, ListFilter, PackagePlus, Server, ShieldCheck, Trash2, Upload, Users } from "lucide-react";
 import { api } from "./api";
 import { DiagnosticsSection } from "./DiagnosticsPanel";
 import { AccountSettings } from "./Login";
@@ -19,6 +19,19 @@ import { resolveStreamSort } from "./streams";
 import { DOWNLOAD_SPEED_LIMITS } from "../../server/src/byte-rate";
 import { UI_SCALES, useUiScale, writeUiScale, type UiScale } from "./ui-scale";
 import { useRovingTabs } from "./use-roving-tabs";
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  SUBTITLE_BACKGROUND_OPACITIES,
+  SUBTITLE_BACKGROUNDS,
+  SUBTITLE_COLORS,
+  SUBTITLE_EDGES,
+  SUBTITLE_POSITIONS,
+  SUBTITLE_SIZES,
+  SUBTITLE_TEXT_OPACITIES,
+  SubtitleText,
+  subtitleStyleVars,
+  type SubtitleStyle,
+} from "./subtitle-style";
 
 export function TmdbSettings({ configured, onSave, onError, restricted = false }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void; restricted?: boolean }) {
   const [apiKey, setApiKey] = useState("");
@@ -106,6 +119,96 @@ const upNextLabel = (value: UpNextAt) => {
   if (value === "sec120") return t("settings.upNextMinutes", { minutes: 2 });
   return t("settings.upNextMinutes", { minutes: 3 });
 };
+
+function SubtitleAppearanceSettings({ settings, restricted, onSave }: {
+  settings: AppSettings;
+  restricted: boolean;
+  onSave: (patch: SettingsPatch) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [previewHdr, setPreviewHdr] = useState(false);
+  const percent = new Intl.NumberFormat(localeTag(), { style: "percent" });
+  const liftedPercent = new Intl.NumberFormat(localeTag(), { style: "percent", signDisplay: "always" });
+  const sdr = settings.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE;
+  const hdr = settings.subtitleStyleHdr;
+  const showingHdr = Boolean(hdr) && previewHdr;
+  const shown = showingHdr ? hdr! : sdr;
+  const saveStyle = (patch: Partial<SubtitleStyle>) => {
+    const next = { ...shown, ...patch };
+    void onSave(showingHdr ? { subtitleStyleHdr: next } : { subtitleStyle: next });
+  };
+  useEffect(() => {
+    if (!hdr) setPreviewHdr(false);
+  }, [hdr]);
+
+  return <>
+    {hdr && <div className="filter-tabs" role="group" aria-label={t("settings.subtitleStyleTitle")}>
+      <button type="button" className={!previewHdr ? "active" : undefined} aria-pressed={!previewHdr} disabled={restricted} onClick={() => setPreviewHdr(false)}>{t("settings.subtitlePreviewSdr")}</button>
+      <button type="button" className={previewHdr ? "active" : undefined} aria-pressed={previewHdr} disabled={restricted} onClick={() => setPreviewHdr(true)}>{t("settings.subtitlePreviewHdr")}</button>
+    </div>}
+    <div className="subtitle-preview" style={{ ...subtitleStyleVars(shown), "--player-bottom-height": "0px", ...(shown.position > 0 ? { "--sub-lift": `${shown.position}%` } : {}) } as CSSProperties}>
+      <div className="player-subtitles">
+        <SubtitleText text={`${t("settings.subtitlePreviewLine1")}\n${t("settings.subtitlePreviewLine2")}`} style={shown}/>
+      </div>
+    </div>
+    <SettingControl title={t("settings.subtitleSize")}>
+      <select aria-label={t("settings.subtitleSize")} disabled={restricted} value={shown.size} onChange={(event) => saveStyle({ size: Number(event.target.value) as SubtitleStyle["size"] })}>
+        {SUBTITLE_SIZES.map((value) => <option key={value} value={value}>{percent.format(value / 100)}</option>)}
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleColor")}>
+      <select aria-label={t("settings.subtitleColor")} disabled={restricted} value={shown.color} onChange={(event) => saveStyle({ color: event.target.value as SubtitleStyle["color"] })}>
+        {SUBTITLE_COLORS.map((value) => <option key={value} value={value}>{t(`settings.subtitleColor${value[0]!.toUpperCase()}${value.slice(1)}` as Key)}</option>)}
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleTextOpacity")}>
+      <select aria-label={t("settings.subtitleTextOpacity")} disabled={restricted} value={shown.textOpacity} onChange={(event) => saveStyle({ textOpacity: Number(event.target.value) as SubtitleStyle["textOpacity"] })}>
+        {SUBTITLE_TEXT_OPACITIES.map((value) => <option key={value} value={value}>{percent.format(value / 100)}</option>)}
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleBackground")}>
+      <select aria-label={t("settings.subtitleBackground")} disabled={restricted} value={shown.background} onChange={(event) => saveStyle({ background: event.target.value as SubtitleStyle["background"] })}>
+        <option value="none">{t("settings.subtitleBackgroundNone")}</option>
+        <option value="box">{t("settings.subtitleBackgroundBox")}</option>
+        <option value="line">{t("settings.subtitleBackgroundLine")}</option>
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleBackgroundOpacity")}>
+      <select aria-label={t("settings.subtitleBackgroundOpacity")} disabled={restricted || shown.background === "none"} value={shown.backgroundOpacity} onChange={(event) => saveStyle({ backgroundOpacity: Number(event.target.value) as SubtitleStyle["backgroundOpacity"] })}>
+        {SUBTITLE_BACKGROUND_OPACITIES.map((value) => <option key={value} value={value}>{percent.format(value / 100)}</option>)}
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleEdge")}>
+      <select aria-label={t("settings.subtitleEdge")} disabled={restricted} value={shown.edge} onChange={(event) => saveStyle({ edge: event.target.value as SubtitleStyle["edge"] })}>
+        <option value="shadow">{t("settings.subtitleEdgeShadow")}</option>
+        <option value="outline">{t("settings.subtitleEdgeOutline")}</option>
+        <option value="none">{t("settings.subtitleEdgeNone")}</option>
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitlePosition")}>
+      <select aria-label={t("settings.subtitlePosition")} disabled={restricted} value={shown.position} onChange={(event) => saveStyle({ position: Number(event.target.value) as SubtitleStyle["position"] })}>
+        {SUBTITLE_POSITIONS.map((value) => <option key={value} value={value}>{value === 0 ? t("settings.subtitlePositionDefault") : liftedPercent.format(value / 100)}</option>)}
+      </select>
+    </SettingControl>
+    <SettingControl title={t("settings.subtitleHdr")} text={t("settings.subtitleHdrHint")}>
+      <select aria-label={t("settings.subtitleHdr")} disabled={restricted} value={hdr ? "own" : "same"} onChange={(event) => {
+        if (event.target.value === "own") {
+          void onSave({ subtitleStyleHdr: { ...sdr, textOpacity: 75 } });
+        } else {
+          void onSave({ subtitleStyleHdr: null });
+        }
+      }}>
+        <option value="same">{t("settings.subtitleHdrSame")}</option>
+        <option value="own">{t("settings.subtitleHdrOwn")}</option>
+      </select>
+    </SettingControl>
+    <div className="setting-actions">
+      <button disabled={restricted || (!settings.subtitleStyle && !settings.subtitleStyleHdr)} onClick={() => void onSave({ subtitleStyle: null, subtitleStyleHdr: null })}>
+        {t("settings.subtitleStyleReset")}
+      </button>
+    </div>
+  </>;
+}
 
 const SETTINGS_TABS = ["libraries", "home", "playback", "sources", "downloads", "services", "account"] as const;
 type SettingsTab = (typeof SETTINGS_TABS)[number];
@@ -356,6 +459,9 @@ export function SettingsPage({ build, restricted = false, settings, search, onSe
             if (!confirm(t("settings.historyConfirm"))) return;
             try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
           }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>}</section>
+      <section className="panel settings-section playback-section subtitle-style-section"><SettingsSectionHead icon={<Captions/>} title={t("settings.subtitleStyleTitle")} text={t("settings.subtitleStyleText")}/>
+        <SubtitleAppearanceSettings settings={settings} restricted={restricted} onSave={onSave}/>
+      </section>
       </>}
       {tab === "home" && <>
       <HomeLayoutSettings disabled={restricted} onError={onError}/>

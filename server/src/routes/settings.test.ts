@@ -22,6 +22,7 @@ import { emptyUserData, type Role, type UserData, type UserRecord } from "../use
 import { homeCatalogRowId, homeFeedSelectionKey } from "../home.js";
 import { RULE_PRESETS, SOURCE_PROFILE_IDS } from "../source-profiles.js";
 import { STREAM_SORTS } from "../stream-sort.js";
+import { DEFAULT_SUBTITLE_STYLE } from "../subtitle-style.js";
 import { registerSettingsRoutes, type SettingsDeps } from "./settings.js";
 
 const ADA = "usr_00000001";
@@ -541,6 +542,87 @@ test("PATCH /api/settings stores a truthy hideSpoilers value as a boolean", asyn
   const body = await response.json() as { hideSpoilers: unknown };
   assert.equal(typeof body.hideSpoilers, "boolean");
   assert.equal(body.hideSpoilers, true);
+});
+
+test("PATCH /api/settings stores normalised subtitle styles on the caller only", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: {
+      subtitleStyle: {
+        size: 200,
+        color: "yellow",
+        textOpacity: 50,
+        background: "box",
+        backgroundOpacity: 100,
+        edge: "outline",
+        position: 20,
+      },
+      subtitleStyleHdr: { size: 125, color: "blue" },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const expected = {
+    size: 200,
+    color: "yellow",
+    textOpacity: 50,
+    background: "box",
+    backgroundOpacity: 100,
+    edge: "outline",
+    position: 20,
+  };
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.subtitleStyle, expected);
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.subtitleStyleHdr, {
+    ...DEFAULT_SUBTITLE_STYLE,
+    size: 125,
+  });
+  assert.equal(harness.state.userData?.[BOB]?.prefs.subtitleStyle, undefined);
+  const body = await response.json() as { subtitleStyle?: unknown; subtitleStyleHdr?: unknown };
+  assert.deepEqual(body.subtitleStyle, expected);
+  assert.deepEqual(body.subtitleStyleHdr, { ...DEFAULT_SUBTITLE_STYLE, size: 125 });
+});
+
+test("PATCH /api/settings clears subtitle styles with null", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![CAROL]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, size: 125 };
+  harness.state.userData![CAROL]!.prefs.subtitleStyleHdr = { ...DEFAULT_SUBTITLE_STYLE, color: "grey" };
+
+  const response = await api(harness.base, "/api/settings", {
+    method: "PATCH",
+    user: "carol",
+    body: { subtitleStyle: null, subtitleStyleHdr: null },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal("subtitleStyle" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
+  assert.equal("subtitleStyleHdr" in (harness.state.userData?.[CAROL]?.prefs ?? {}), false);
+});
+
+test("PATCH /api/settings refuses a malformed subtitle style before writing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![CAROL]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, position: 5 };
+  const writes = harness.writes();
+
+  for (const subtitleStyle of ["large", 200, []]) {
+    const response = await api(harness.base, "/api/settings", {
+      method: "PATCH",
+      user: "carol",
+      body: { subtitleStyle, subtitleStyleHdr: { color: "cyan" } },
+    });
+    assert.equal(response.status, 400, JSON.stringify(subtitleStyle));
+    assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.subtitleStyleShape");
+  }
+
+  assert.equal(harness.writes(), writes);
+  assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.subtitleStyle, { ...DEFAULT_SUBTITLE_STYLE, position: 5 });
+  assert.equal(harness.state.userData?.[CAROL]?.prefs.subtitleStyleHdr, undefined);
+  assert.equal(harness.state.userData?.[BOB]?.prefs.subtitleStyle, undefined);
 });
 
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {
@@ -1419,6 +1501,84 @@ const backupFile = (over: Record<string, unknown> = {}) => ({
     libraries: [{ id: `rlib_${"2".repeat(32)}`, connectionId: `mconn_${"1".repeat(32)}`, remoteId: "remote-1", name: "Films", type: "movie", order: 0, showOnHome: true, showInContinueWatching: true }],
   },
   ...over,
+});
+
+test("subtitle styles survive a settings backup round trip", async (t) => {
+  const source = await mount();
+  t.after(source.close);
+  const subtitleStyle = {
+    size: 150,
+    color: "green",
+    textOpacity: 75,
+    background: "line",
+    backgroundOpacity: 50,
+    edge: "none",
+    position: 10,
+  } as const;
+  const subtitleStyleHdr = {
+    ...subtitleStyle,
+    color: "grey",
+    textOpacity: 50,
+  } as const;
+  const saved = await api(source.base, "/api/settings", {
+    method: "PATCH",
+    user: "ada",
+    body: { subtitleStyle, subtitleStyleHdr },
+  });
+  assert.equal(saved.status, 200);
+  const backup = await (await api(source.base, "/api/settings/export", { user: "ada" })).json() as {
+    settings: { subtitleStyle?: unknown; subtitleStyleHdr?: unknown };
+  };
+  assert.deepEqual(backup.settings.subtitleStyle, subtitleStyle);
+  assert.deepEqual(backup.settings.subtitleStyleHdr, subtitleStyleHdr);
+
+  const target = await mount();
+  t.after(target.close);
+  const imported = await api(target.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backup,
+  });
+  assert.equal(imported.status, 200);
+  assert.deepEqual(target.state.userData?.[ADA]?.prefs.subtitleStyle, subtitleStyle);
+  assert.deepEqual(target.state.userData?.[ADA]?.prefs.subtitleStyleHdr, subtitleStyleHdr);
+});
+
+test("a backup with an SDR subtitle style and no HDR style clears the imported account's HDR style", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  harness.state.userData![ADA]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, size: 75 };
+  harness.state.userData![ADA]!.prefs.subtitleStyleHdr = { ...DEFAULT_SUBTITLE_STYLE, color: "grey" };
+  const subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, size: 200, position: 20 };
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backupFile({ settings: { concurrentDownloads: 3, subtitleStyle } }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.userData?.[ADA]?.prefs.subtitleStyle, subtitleStyle);
+  assert.equal(harness.state.userData?.[ADA]?.prefs.subtitleStyleHdr, undefined);
+});
+
+test("an older backup with neither subtitle style leaves both account styles in place", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, size: 125 };
+  const subtitleStyleHdr = { ...DEFAULT_SUBTITLE_STYLE, color: "yellow" };
+  harness.state.userData![ADA]!.prefs.subtitleStyle = subtitleStyle;
+  harness.state.userData![ADA]!.prefs.subtitleStyleHdr = subtitleStyleHdr;
+
+  const response = await api(harness.base, "/api/settings/import", {
+    method: "POST",
+    user: "ada",
+    body: backupFile({ settings: { concurrentDownloads: 3 } }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(harness.state.userData?.[ADA]?.prefs.subtitleStyle, subtitleStyle);
+  assert.deepEqual(harness.state.userData?.[ADA]?.prefs.subtitleStyleHdr, subtitleStyleHdr);
 });
 
 const PROFILE_ONE = "00000000-0000-4000-8000-000000000101";

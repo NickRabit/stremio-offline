@@ -25,6 +25,7 @@ import { endsAt, formatEndsAt } from "./player-clock";
 import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
 import { toCssPx } from "./ui-scale";
+import { SubtitleText, effectiveSubtitleStyle, subtitleStyleVars, type SubtitleStyle } from "./subtitle-style";
 
 const SIDECAR_SEEK_DEBOUNCE_MS = 600;
 const SIDECAR_SEEK_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
@@ -55,6 +56,8 @@ interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; n
   startAtSeconds?: number;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
+  subtitleStyle?: SubtitleStyle;
+  subtitleStyleHdr?: SubtitleStyle;
 }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -275,7 +278,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onSaveElsewhere, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onSaveElsewhere, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey, subtitleStyle, subtitleStyleHdr }: Props) {
   const { child } = useChildMode();
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
@@ -1928,6 +1931,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const position = scrub ?? time;
   const seekable = duration || Math.max(time, 1);
   const badges = playingBadges(session?.playing);
+  const subtitleStyleForSession = effectiveSubtitleStyle(
+    { subtitleStyle, subtitleStyleHdr },
+    Boolean(session?.playing?.hdr),
+  );
   const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
   const chapterIndex = chapterAt(chapters, position);
   // The minute tick only re-renders a paused player; while playing the position moves the clock along.
@@ -1939,7 +1946,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
   const pipLabel = t(pip ? "player.exitPictureInPicture" : "player.pictureInPicture");
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} style={subtitleStyleVars(subtitleStyleForSession)} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong>{badges.length > 0 && <span className="player-badges">{badges.map((badge) => <i key={badge}>{badge}</i>)}</span>}</div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
@@ -2042,7 +2049,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           ? <track key={`${session.sidecarUrl}:${sidecarEpoch}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}:${subtitleDelay}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset, subtitleDelay, addonSubtitle.lang || subtitleLanguage)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
-      {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
+      {subtitleText && <div className="player-subtitles" aria-live="off"><SubtitleText text={subtitleText} style={subtitleStyleForSession}/></div>}
       {resumedFrom > 0 && <div className="player-resumed">{t("player.resumedAt", { time: fmt(resumedFrom) })}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>{t("player.playFromStart")}</button></div>}
       {seekKept && !resumedFrom && !error && <div className="player-resumed" role="status">{t("player.seekRestored")}</div>}
       {buffering && !error && <div className="player-buffer">{t("common.loading")}</div>}

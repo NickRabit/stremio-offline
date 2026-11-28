@@ -6,6 +6,7 @@ import type { PlayerSources } from "./Player";
 import { ChildModeProvider } from "./child-mode";
 import { setLocale } from "./i18n";
 import type { LibrarySourceGroup } from "./library-sources";
+import type { SubtitleStyle } from "./subtitle-style";
 import type { RemoteCapabilities, Stream } from "./types";
 
 const hlsMock = vi.hoisted(() => {
@@ -345,6 +346,84 @@ const sidecarSession = (over: Record<string, unknown> = {}) => ({
   subtitleTracks: [{ index: 0, language: "en", codec: "subrip" }],
   sidecarUrl: "/api/playback/sess1/sidecar.vtt?revision=old&offset=0.000",
   ...over,
+});
+
+const styledSubtitles = (over: Partial<SubtitleStyle> = {}): SubtitleStyle => ({
+  size: 200,
+  color: "yellow",
+  textOpacity: 75,
+  background: "none",
+  backgroundOpacity: 75,
+  edge: "shadow",
+  position: 0,
+  ...over,
+});
+
+describe("Player subtitle appearance", () => {
+  const showCues = async () => {
+    const listeners = new Set<() => void>();
+    const track = {
+      mode: "showing",
+      activeCues: [{ text: "First subtitle line\nSecond subtitle line" }],
+      addEventListener(event: string, listener: () => void) { if (event === "cuechange") listeners.add(listener); },
+      removeEventListener(event: string, listener: () => void) { if (event === "cuechange") listeners.delete(listener); },
+    };
+    Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+      configurable: true,
+      get: () => Object.assign([track], {
+        length: 1,
+        addEventListener() {},
+        removeEventListener() {},
+        item: () => track,
+      }),
+    });
+    await render();
+    await act(async () => { for (const listener of listeners) listener(); });
+    await flush();
+    return host.querySelector(".player-subtitles")!;
+  };
+
+  it("keeps the default overlay and subtitle content unchanged", async () => {
+    const subtitles = await showCues();
+    const overlay = host.querySelector<HTMLElement>(".player-overlay")!;
+    expect(overlay.getAttribute("style") ?? "").not.toContain("--sub-");
+    expect(subtitles.textContent).toBe("First subtitle line\nSecond subtitle line");
+    expect(subtitles.children).toHaveLength(0);
+  });
+
+  it("puts the chosen style variables on the overlay", async () => {
+    Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+      configurable: true,
+      get: () => Object.assign([], { length: 0, addEventListener() {}, removeEventListener() {}, item: () => null }),
+    });
+    await render({ subtitleStyle: styledSubtitles({ size: 150, position: 10 }) });
+    const overlay = host.querySelector<HTMLElement>(".player-overlay")!;
+    expect(overlay.style.getPropertyValue("--sub-scale")).toBe("1.5");
+    expect(overlay.style.getPropertyValue("--sub-color")).toBe("rgba(255, 233, 77, 0.75)");
+    expect(overlay.style.getPropertyValue("--sub-lift")).toBe("calc(10 * 1dvh / var(--ui-scale, 1))");
+  });
+
+  it("uses the HDR style only while HDR is playing", async () => {
+    sessionShape = { playing: { hdr: "hdr10" } };
+    Object.defineProperty(HTMLMediaElement.prototype, "textTracks", {
+      configurable: true,
+      get: () => Object.assign([], { length: 0, addEventListener() {}, removeEventListener() {}, item: () => null }),
+    });
+    await render({
+      subtitleStyle: styledSubtitles({ size: 125 }),
+      subtitleStyleHdr: styledSubtitles({ size: 200, color: "grey", textOpacity: 50 }),
+    });
+    const overlay = host.querySelector<HTMLElement>(".player-overlay")!;
+    expect(overlay.style.getPropertyValue("--sub-scale")).toBe("2");
+    expect(overlay.style.getPropertyValue("--sub-color")).toBe("rgba(200, 200, 200, 0.5)");
+
+    sessionShape = {};
+    await rerender({
+      subtitleStyle: styledSubtitles({ size: 125 }),
+      subtitleStyleHdr: styledSubtitles({ size: 200, color: "grey", textOpacity: 50 }),
+    });
+    expect(host.querySelector<HTMLElement>(".player-overlay")!.style.getPropertyValue("--sub-scale")).toBe("1.25");
+  });
 });
 
 describe("Player sidecar seeks", () => {

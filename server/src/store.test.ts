@@ -503,7 +503,7 @@ test("the personal settings are the keys PERSONAL_SETTINGS names, both ways roun
   const listed = [...PERSONAL_SETTINGS].sort();
   // Legacy page-size keys stay personal so saved values can be migrated; none has a default.
   // Optional personal choices stay absent until the person makes them.
-  const optional: string[] = ["homeLayout", "downloadSourceProfile", "followSourceProfile", "defaultRulesProfileId", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize"];
+  const optional: string[] = ["homeLayout", "downloadSourceProfile", "followSourceProfile", "defaultRulesProfileId", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize", "subtitleStyle", "subtitleStyleHdr"];
   assert.deepEqual([...new Set([...keys, ...optional])].sort(), listed);
   const defaults = new Set(keys);
   for (const key of PERSONAL_SETTINGS) {

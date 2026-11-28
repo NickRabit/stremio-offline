@@ -153,6 +153,59 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await expect(overlay).toHaveCount(0);
 });
 
+test("large raised subtitles stay above the controls on phones", async ({ page, request }, testInfo) => {
+  test.skip(!["mobile", "mobile-landscape", "mobile-landscape-small"].includes(testInfo.project.name), "phone subtitle layout");
+  const saved = await request.patch("/api/settings", {
+    data: { subtitleStyle: { size: 200, position: 20 } },
+  });
+  expect(saved.ok()).toBe(true);
+  try {
+    await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Katalog", exact: true }).click();
+    await chooseCatalog(page, /Filmy/, "movie");
+    await page.getByRole("button", { name: /Zkušební film/ }).click();
+    await pickAddonStream(page);
+    await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+    const overlay = page.locator(".player-overlay");
+    const video = overlay.locator("video");
+    await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
+    await video.evaluate(async (element: HTMLVideoElement) => {
+      element.playbackRate = 0.1;
+      await element.play();
+      const track = element.addTextTrack("subtitles", "Layout", "cs");
+      track.addCue(new VTTCue(0, 3600, "First subtitle line\nSecond subtitle line"));
+      track.mode = "showing";
+    });
+    await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+    await expect(overlay).not.toHaveClass(/controls-hidden/);
+    const cues = overlay.locator(".player-subtitles");
+    await expect(cues).toBeVisible();
+
+    const check = async () => {
+      await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+      await expect(overlay).not.toHaveClass(/controls-hidden/);
+      const viewport = page.viewportSize()!;
+      const cueBox = (await cues.boundingBox())!;
+      const bottomBox = (await overlay.locator(".player-bottom").boundingBox())!;
+      expect(cueBox.x).toBeGreaterThanOrEqual(0);
+      expect(cueBox.y).toBeGreaterThanOrEqual(0);
+      expect(cueBox.x + cueBox.width).toBeLessThanOrEqual(viewport.width);
+      expect(cueBox.y + cueBox.height).toBeLessThanOrEqual(viewport.height);
+      expect(cueBox.y + cueBox.height).toBeLessThanOrEqual(bottomBox.y + 1);
+    };
+
+    await check();
+    if (testInfo.project.name === "mobile") {
+      const viewport = page.viewportSize()!;
+      await page.setViewportSize({ width: 320, height: viewport.height });
+      await check();
+    }
+  } finally {
+    await request.patch("/api/settings", { data: { subtitleStyle: null } });
+  }
+});
+
 test("picture in picture sits in the bar except on a phone held upright", async ({ page, request }, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "pictureInPictureEnabled", { configurable: true, value: true });

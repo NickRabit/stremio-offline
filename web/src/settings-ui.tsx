@@ -13,7 +13,7 @@ export function SettingsSectionHead({ icon, title, text }: { icon: ReactNode; ti
   return <div className="settings-section-head"><i>{icon}</i><span><strong>{title}</strong>{text && <small>{text}</small>}</span></div>;
 }
 
-export function SettingControl({ title, text, children }: { title: string; text: string; children: ReactNode }) {
+export function SettingControl({ title, text, children }: { title: string; text?: string; children: ReactNode }) {
   return <label className="setting-control"><span><strong>{title}</strong>{text && <small>{text}</small>}</span>{children}</label>;
 }
 

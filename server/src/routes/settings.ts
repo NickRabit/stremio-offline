@@ -37,6 +37,7 @@ import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
 import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
+import { normalizeSubtitleStyle } from "../subtitle-style.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
 export interface SettingsDeps extends RouteContext {
@@ -230,6 +231,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       upNextAt, skipSegmentsAuto, hideSpoilers,
+      subtitleStyle, subtitleStyleHdr,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
       homeLayout, downloadSourceProfile, followSourceProfile, defaultRulesProfileId,
       ...instance
@@ -240,6 +242,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
         mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
         upNextAt, skipSegmentsAuto, hideSpoilers,
+        ...(subtitleStyle ? { subtitleStyle } : {}),
+        ...(subtitleStyleHdr ? { subtitleStyleHdr } : {}),
         catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
         followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
         ...(homeLayout ? { homeLayout } : {}),
@@ -394,7 +398,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         );
       }
       const userId = accountIdOf(req);
-      if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
+      if (userId) mutateData(state, userId, (data) => {
+        data.prefs = { ...data.prefs, ...split.prefs };
+        if (split.prefs.subtitleStyle !== undefined && split.prefs.subtitleStyleHdr === undefined) {
+          delete data.prefs.subtitleStyleHdr;
+        }
+      });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
         for (const data of state.userData ? Object.values(state.userData) : []) {
@@ -487,6 +496,16 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       && (!postedLayout || postedLayout.order.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.hidden.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.feeds.length > HOME_LAYOUT_FEED_LIMIT)) {
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
+    const subtitleStyle = req.body.subtitleStyle === undefined || req.body.subtitleStyle === null
+      ? req.body.subtitleStyle
+      : normalizeSubtitleStyle(req.body.subtitleStyle);
+    const subtitleStyleHdr = req.body.subtitleStyleHdr === undefined || req.body.subtitleStyleHdr === null
+      ? req.body.subtitleStyleHdr
+      : normalizeSubtitleStyle(req.body.subtitleStyleHdr);
+    if ((req.body.subtitleStyle !== undefined && req.body.subtitleStyle !== null && subtitleStyle === undefined)
+      || (req.body.subtitleStyleHdr !== undefined && req.body.subtitleStyleHdr !== null && subtitleStyleHdr === undefined)) {
+      throw new AppError("A subtitle style must be an object of the known options.", "err.subtitleStyleShape", 400);
+    }
     const postedProfile = req.body.downloadSourceProfile;
     const postedFollowProfile = req.body.followSourceProfile;
     const postedDefaultRulesProfile = req.body.defaultRulesProfileId;
@@ -540,6 +559,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.upNextAt !== undefined) prefs.upNextAt = req.body.upNextAt as UpNextAt;
       if (req.body.skipSegmentsAuto !== undefined) prefs.skipSegmentsAuto = Boolean(req.body.skipSegmentsAuto);
       if (req.body.hideSpoilers !== undefined) prefs.hideSpoilers = Boolean(req.body.hideSpoilers);
+      if (req.body.subtitleStyle !== undefined) {
+        if (req.body.subtitleStyle === null) delete prefs.subtitleStyle;
+        else prefs.subtitleStyle = subtitleStyle;
+      }
+      if (req.body.subtitleStyleHdr !== undefined) {
+        if (req.body.subtitleStyleHdr === null) delete prefs.subtitleStyleHdr;
+        else prefs.subtitleStyleHdr = subtitleStyleHdr;
+      }
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
       // Detail has to be recorded before it can be read: a line the server never wrote is not
