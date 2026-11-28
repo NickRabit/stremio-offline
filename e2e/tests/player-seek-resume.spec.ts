@@ -96,3 +96,42 @@ for (const scenario of ["playing", "paused", "queued", "closed", "unconfirmed"] 
     }
   });
 }
+
+test("the chosen playback speed survives a source re-attachment", async ({ page }) => {
+  const descriptor = { id: "resume-test", mode: "remux", url: "/seek-resume/1/index.m3u8", offset: 0, duration: 6000, hardware: false, acceleration: false, audioTracks: [], subtitleTracks: [], audioTrack: 0, subtitleTrack: null, quality: null };
+  const restarted = { ...descriptor, url: "/seek-resume/2/index.m3u8" };
+  const playlists: string[] = [];
+  await page.route("**/seek-resume/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    const name = path.basename(pathname);
+    if (name.endsWith("m3u8")) playlists.push(pathname);
+    await route.fulfill({ contentType: name.endsWith("m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4", body: await readFile(path.join(folder, name)) });
+  });
+  await withholdUnloadProgress(page);
+  await page.route("**/api/progress", (route) => route.request().method() === "POST" ? route.fulfill({ status: 204 }) : route.continue());
+  await page.route("**/api/progress/*", (route) => route.request().method() === "GET" ? route.fulfill({ json: null }) : route.continue());
+  await page.route("**/api/playback", (route) => route.fulfill({ json: descriptor }));
+  await page.route("**/api/playback/resume-test", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/api/playback/resume-test/seek", (route) => route.fulfill({ json: restarted }));
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Katalog", exact: true }).click();
+  await chooseCatalog(page, /Filmy/, "movie");
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
+  await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const overlay = page.locator(".player-overlay");
+  const video = overlay.locator("video");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => !element.paused && element.currentTime > 1)).toBe(true);
+  await overlay.dispatchEvent("pointermove");
+  await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
+  await overlay.getByRole("combobox", { name: "Rychlost", exact: true }).selectOption("2");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.playbackRate)).toBe(2);
+
+  const response = page.waitForResponse((request) => request.url().endsWith("/resume-test/seek"));
+  await page.getByRole("slider", { name: "Pozice", exact: true }).click({ position: { x: 250, y: 5 }, force: true });
+  await response;
+  await expect.poll(() => playlists.includes("/seek-resume/2/index.m3u8")).toBe(true);
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => !element.paused && element.playbackRate === 2 && element.currentTime > 0.3)).toBe(true);
+  expect(await video.evaluate((element: HTMLVideoElement) => element.playbackRate)).toBe(2);
+});

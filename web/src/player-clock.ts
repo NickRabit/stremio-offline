@@ -1,10 +1,10 @@
 import { localeTag } from "./i18n";
 
-export function endsAt(nowMs: number, position: number, duration: number): number | null {
+export function endsAt(nowMs: number, position: number, duration: number, speed = 1): number | null {
   if (!Number.isFinite(duration) || duration <= 0) return null;
   const start = Math.max(0, position);
   if (!(start < duration)) return null;
-  return nowMs + (duration - start) * 1000;
+  return nowMs + (duration - start) * 1000 / speed;
 }
 
 export function formatEndsAt(epochMs: number): string {

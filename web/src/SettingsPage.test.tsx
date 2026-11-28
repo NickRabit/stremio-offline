@@ -5,6 +5,7 @@ import { SettingsPage } from "./SettingsPage";
 import { setLocale } from "./i18n";
 import { en } from "./i18n/en";
 import type { Session, Settings as AppSettings, SourceProfile } from "./types";
+import { DEFAULT_SUBTITLE_STYLE } from "./subtitle-style";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -486,5 +487,70 @@ describe("SettingsPage playback options", () => {
       skip.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(onSave).toHaveBeenCalledWith({ skipSegmentsAuto: false });
+  });
+
+  it("saves a whole subtitle style when the size changes", async () => {
+    const { onSave } = await render();
+    await selectTab("Playback");
+    const size = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.subtitleSize"]}"]`)!;
+
+    await act(async () => {
+      size.value = "200";
+      size.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({
+      subtitleStyle: { ...DEFAULT_SUBTITLE_STYLE, size: 200 },
+    });
+  });
+
+  it("resets both subtitle styles together", async () => {
+    const { onSave } = await render({
+      subtitleStyle: { ...DEFAULT_SUBTITLE_STYLE, size: 125 },
+      subtitleStyleHdr: { ...DEFAULT_SUBTITLE_STYLE, textOpacity: 75 },
+    });
+    await selectTab("Playback");
+    const reset = [...host.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === en["settings.subtitleStyleReset"])!;
+
+    await act(async () => { reset.click(); });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ subtitleStyle: null, subtitleStyleHdr: null });
+  });
+
+  it("disables every subtitle control in restricted mode", async () => {
+    await render({
+      subtitleStyle: { ...DEFAULT_SUBTITLE_STYLE, size: 125 },
+      subtitleStyleHdr: { ...DEFAULT_SUBTITLE_STYLE, textOpacity: 75 },
+    }, true);
+    await selectTab("Playback");
+    const section = host.querySelector<HTMLElement>(".subtitle-style-section")!;
+    const controls = [...section.querySelectorAll<HTMLSelectElement | HTMLButtonElement>("select, button")];
+
+    expect(controls.length).toBeGreaterThanOrEqual(11);
+    expect(controls.every((control) => control.disabled)).toBe(true);
+  });
+
+  it("creates a dimmer HDR copy from Own style", async () => {
+    const { onSave } = await render({ subtitleStyle: { ...DEFAULT_SUBTITLE_STYLE, size: 150, color: "green" } });
+    await selectTab("Playback");
+    const hdr = host.querySelector<HTMLSelectElement>(`select[aria-label="${en["settings.subtitleHdr"]}"]`)!;
+
+    await act(async () => {
+      hdr.value = "own";
+      hdr.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({
+      subtitleStyleHdr: {
+        ...DEFAULT_SUBTITLE_STYLE,
+        size: 150,
+        color: "green",
+        textOpacity: 75,
+      },
+    });
   });
 });

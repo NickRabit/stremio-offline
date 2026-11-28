@@ -37,6 +37,7 @@ import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
 import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
+import { DEFAULT_SUBTITLE_STYLE, canonicalSubtitleStyle, isDefaultSubtitleStyle, isSubtitleStyle, type SubtitleStyle } from "../subtitle-style.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
 export interface SettingsDeps extends RouteContext {
@@ -230,6 +231,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
       mergeByName, streamSort, trackProgress, showResumeRow,
       upNextAt, skipSegmentsAuto, hideSpoilers,
+      subtitleStyle, subtitleStyleHdr,
       tileSize, catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape, followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
       homeLayout, downloadSourceProfile, followSourceProfile, defaultRulesProfileId,
       ...instance
@@ -240,6 +242,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         uiLanguage, audioLanguage, subtitleLanguage, downloadTitleLanguage,
         mergeByName, streamSort, trackProgress, showResumeRow, tileSize,
         upNextAt, skipSegmentsAuto, hideSpoilers,
+        ...(subtitleStyle ? { subtitleStyle } : {}),
+        ...(subtitleStyleHdr ? { subtitleStyleHdr } : {}),
         catalogTileShape, libraryTileShape, favoritesTileShape, resumeTileShape,
         followingTileShape, homeTileShape, searchTileShape, startView, libraryShelf,
         ...(homeLayout ? { homeLayout } : {}),
@@ -264,6 +268,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       {
         ...store.settings(),
         ...prefs,
+        // Always present, so restoring a backup of the default look restores the default look.
+        subtitleStyle: prefs.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE,
         streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
       },
       store.addons(),
@@ -394,7 +400,17 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         );
       }
       const userId = accountIdOf(req);
-      if (userId) mutateData(state, userId, (data) => { data.prefs = { ...data.prefs, ...split.prefs }; });
+      if (userId) mutateData(state, userId, (data) => {
+        data.prefs = { ...data.prefs, ...split.prefs };
+        // A backup that carries one style speaks for both: the other one was the default there.
+        if (split.prefs.subtitleStyle !== undefined && split.prefs.subtitleStyleHdr === undefined) {
+          delete data.prefs.subtitleStyleHdr;
+        }
+        if (split.prefs.subtitleStyleHdr !== undefined && split.prefs.subtitleStyle === undefined) {
+          delete data.prefs.subtitleStyle;
+        }
+        if (split.prefs.subtitleStyle && isDefaultSubtitleStyle(split.prefs.subtitleStyle)) delete data.prefs.subtitleStyle;
+      });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
         for (const data of state.userData ? Object.values(state.userData) : []) {
@@ -487,6 +503,12 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       && (!postedLayout || postedLayout.order.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.hidden.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.feeds.length > HOME_LAYOUT_FEED_LIMIT)) {
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
+    const subtitleStyle: unknown = req.body.subtitleStyle;
+    const subtitleStyleHdr: unknown = req.body.subtitleStyleHdr;
+    if ((subtitleStyle !== undefined && subtitleStyle !== null && !isSubtitleStyle(subtitleStyle))
+      || (subtitleStyleHdr !== undefined && subtitleStyleHdr !== null && !isSubtitleStyle(subtitleStyleHdr))) {
+      throw new AppError("A subtitle style must be an object of the known options.", "err.subtitleStyleShape", 400);
+    }
     const postedProfile = req.body.downloadSourceProfile;
     const postedFollowProfile = req.body.followSourceProfile;
     const postedDefaultRulesProfile = req.body.defaultRulesProfileId;
@@ -504,6 +526,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       // Only when the body reaches the instance half: an ordinary account writing its own
       // preferences is not making an administrator's change and must not be asked to be one.
       if (touchesInstance) assertStillAdmin(state.users ?? [], actor);
+      const touched = () => JSON.stringify([state.settings, userId ? state.userData?.[userId]?.prefs : undefined]);
+      const unchanged = touched();
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
@@ -540,6 +564,14 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.upNextAt !== undefined) prefs.upNextAt = req.body.upNextAt as UpNextAt;
       if (req.body.skipSegmentsAuto !== undefined) prefs.skipSegmentsAuto = Boolean(req.body.skipSegmentsAuto);
       if (req.body.hideSpoilers !== undefined) prefs.hideSpoilers = Boolean(req.body.hideSpoilers);
+      if (subtitleStyle !== undefined) {
+        if (subtitleStyle === null) delete prefs.subtitleStyle;
+        else prefs.subtitleStyle = canonicalSubtitleStyle(subtitleStyle as SubtitleStyle);
+      }
+      if (subtitleStyleHdr !== undefined) {
+        if (subtitleStyleHdr === null) delete prefs.subtitleStyleHdr;
+        else prefs.subtitleStyleHdr = canonicalSubtitleStyle(subtitleStyleHdr as SubtitleStyle);
+      }
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
       // Detail has to be recorded before it can be read: a line the server never wrote is not
@@ -624,6 +656,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
       if (userId && touchesPrefs) mutateData(state, userId, (data) => { data.prefs = prefs; });
+      // A save that changes nothing is not written to disk.
+      if (touched() === unchanged) return false;
     });
     const languageChanged = prefsOf(req).uiLanguage !== languageBefore;
     if (tmdbApiKey !== undefined || languageChanged) {

@@ -12,6 +12,7 @@ import { log } from "./logger.js";
 import type { ProgressSeries } from "./progress-series.js";
 import type { MediaConnectionRecord, RemoteLibraryRecord } from "./media-server-types.js";
 import type { DownloadRules } from "./download-rules.js";
+import type { SubtitleStyle } from "./subtitle-style.js";
 import {
   buildTemplatePolicy,
   parseTemplateParameters,
@@ -114,6 +115,10 @@ export interface UserPrefs {
   skipSegmentsAuto: boolean;
   /** Blur stills of episodes this account has not watched. */
   hideSpoilers: boolean;
+  /** How this account's subtitles look; absent means the player's original appearance. */
+  subtitleStyle?: SubtitleStyle;
+  /** The HDR-specific appearance; absent follows `subtitleStyle`. */
+  subtitleStyleHdr?: SubtitleStyle;
   /** One account's own Home: the row order it placed, the rows it hid and the extra feeds it
    *  added. Absent means the instance's default Home. */
   homeLayout?: HomeLayout;

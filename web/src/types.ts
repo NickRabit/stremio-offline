@@ -5,6 +5,7 @@ import type { HomeLayout } from "../../server/src/home";
 import type { MediaServerConfigurationExport } from "../../server/src/media-server-store";
 import type { DownloadRules as ServerDownloadRules, RulePreference, RuleResolution } from "../../server/src/download-rules";
 import type { SourcePolicyV1 } from "../../server/src/source-policy";
+import type { SubtitleStyle } from "./subtitle-style";
 export type { FavoriteCatalogItem, FavoriteItem, FavoriteLibraryItem, FavoriteRemoteItem } from "../../server/src/favorites";
 export type { RemoteHomeCard, ResumeCard } from "../../server/src/home";
 /** What the interface offers: the kind of title. The server keeps answering the card kinds an
@@ -571,6 +572,10 @@ export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string; downloadTitleLanguage: "ui" | string;
   mergeByName: boolean; streamSort: string; defaultRulesProfileId?: string; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   upNextAt: UpNextAt; skipSegmentsAuto: boolean; hideSpoilers?: boolean;
+  /** This account's subtitle appearance; absent keeps the player's original look. */
+  subtitleStyle?: SubtitleStyle;
+  /** The HDR-specific subtitle appearance; absent follows `subtitleStyle`. */
+  subtitleStyleHdr?: SubtitleStyle;
   secureMode: boolean;
   /** What the server writes down, as opposed to what the log view filters back out. */
   logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
@@ -604,7 +609,7 @@ type AdminOnlySetting =
 /** What GET and PATCH /api/settings answer. An administrator receives every key; everybody
  *  else is missing the ones above, and the interface keeps its own defaults for them. */
 export type SettingsView = Omit<Settings, AdminOnlySetting> & Partial<Pick<Settings, AdminOnlySetting>>;
-export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadWindow" | "serverTimeZone" | "downloadSourceProfile" | "followSourceProfile">> & { homeLayout?: HomeLayout | null; downloadWindow?: DownloadWindow | null; downloadSourceProfile?: string | null; followSourceProfile?: string | null; realDebridToken?: string; tmdbApiKey?: string };
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured" | "tmdbConfigured" | "homeLayout" | "downloadWindow" | "serverTimeZone" | "downloadSourceProfile" | "followSourceProfile" | "subtitleStyle" | "subtitleStyleHdr">> & { homeLayout?: HomeLayout | null; downloadWindow?: DownloadWindow | null; downloadSourceProfile?: string | null; followSourceProfile?: string | null; subtitleStyle?: SubtitleStyle | null; subtitleStyleHdr?: SubtitleStyle | null; realDebridToken?: string; tmdbApiKey?: string };
 /** The media-server metadata a version 3 backup adds: the server's own metadata-only export,
  *  reused so a credential, generation or grant can never reach a settings file. */
 export type SettingsBackupMediaServers = MediaServerConfigurationExport;

@@ -44,6 +44,18 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
   await expect(overlay.locator(".player-settings")).toBeVisible();
+  const speedSelect = overlay.getByRole("combobox", { name: "Rychlost", exact: true });
+  if (testInfo.project.name === "mobile-landscape-small") {
+    const panel = overlay.locator("#player-settings");
+    await expect(speedSelect).toBeVisible();
+    expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
+    const panelBox = (await panel.boundingBox())!;
+    const selectBox = (await speedSelect.boundingBox())!;
+    expect(selectBox.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+    expect(selectBox.y).toBeGreaterThanOrEqual(panelBox.y - 1);
+    expect(selectBox.x + selectBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+    expect(selectBox.y + selectBox.height).toBeLessThanOrEqual(panelBox.y + panelBox.height + 1);
+  }
   await page.waitForTimeout(3800);
   await expect(overlay).not.toHaveClass(/controls-hidden/);
   const overflow = await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth);
@@ -54,7 +66,12 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const viewItems = await overlay.locator(".player-view-controls button").all();
   expect(await viewItems[0].getAttribute("aria-label")).toBe("Vyplnit obrazovku");
   expect(await viewItems[1].getAttribute("aria-label")).toBe("Zdroje");
-  expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
+  if (await overlay.locator(".player-view-controls .player-pip-toggle").count()) {
+    expect(await viewItems[2].getAttribute("aria-label")).toBe("Obraz v obraze (P)");
+    expect(await viewItems[3].getAttribute("aria-label")).toBe("Nastavení přehrávání");
+  } else {
+    expect(await viewItems[2].getAttribute("aria-label")).toBe("Nastavení přehrávání");
+  }
   const viewBoxes = await Promise.all(viewItems.map((button) => button.boundingBox()));
   expect(viewBoxes.map((box) => box!.x)).toEqual(viewBoxes.map((box) => box!.x).sort((a, b) => a - b));
   // The same quiet bar at every size and orientation: its buttons are bare icons until the pointer
@@ -101,6 +118,22 @@ test("player keeps its picture stable and its overlay controls reachable", async
     await checkPortrait();
     await page.setViewportSize({ width: 320, height: viewport.height });
     await checkPortrait();
+    // The clip is two seconds long and the test keeps it at 0.1x; the speed picker must not let it end.
+    await speedSelect.selectOption("1.5");
+    await video.evaluate((element: HTMLVideoElement) => { element.playbackRate = 0.1; });
+    const speed = overlay.locator(".player-speed");
+    const endsAt = overlay.locator(".player-ends-at");
+    await expect(speed).toHaveText("1,5×");
+    await expect(endsAt).toBeVisible();
+    const speedBox = (await speed.boundingBox())!;
+    const endsAtBox = (await endsAt.boundingBox())!;
+    expect(Math.abs((speedBox.y + speedBox.height / 2) - (endsAtBox.y + endsAtBox.height / 2))).toBeLessThanOrEqual(1);
+    for (const box of [speedBox, endsAtBox]) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    await speedSelect.selectOption("1");
+    await video.evaluate((element: HTMLVideoElement) => { element.playbackRate = 0.1; });
     await page.setViewportSize(viewport);
   }
 
@@ -121,6 +154,122 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   await expect(overlay).toHaveCount(0);
+});
+
+test("large raised subtitles stay above the controls on phones", async ({ page, request }, testInfo) => {
+  test.skip(!["mobile", "mobile-landscape", "mobile-landscape-small"].includes(testInfo.project.name), "phone subtitle layout");
+  const saved = await request.patch("/api/settings", {
+    data: { subtitleStyle: { size: 200, color: "white", textOpacity: 100, background: "none", backgroundOpacity: 75, edge: "shadow", position: 20 } },
+  });
+  expect(saved.ok()).toBe(true);
+  try {
+    await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Katalog", exact: true }).click();
+    await chooseCatalog(page, /Filmy/, "movie");
+    await page.getByRole("button", { name: /Zkušební film/ }).click();
+    await pickAddonStream(page);
+    await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+    const overlay = page.locator(".player-overlay");
+    const video = overlay.locator("video");
+    await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
+    await video.evaluate(async (element: HTMLVideoElement) => {
+      element.playbackRate = 0.1;
+      await element.play();
+      const track = element.addTextTrack("subtitles", "Layout", "cs");
+      track.addCue(new VTTCue(0, 3600, "First subtitle line\nSecond subtitle line"));
+      track.mode = "showing";
+    });
+    await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+    await expect(overlay).not.toHaveClass(/controls-hidden/);
+    const cues = overlay.locator(".player-subtitles");
+    await expect(cues).toBeVisible();
+
+    const check = async () => {
+      await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+      await expect(overlay).not.toHaveClass(/controls-hidden/);
+      const viewport = page.viewportSize()!;
+      const cueBox = (await cues.boundingBox())!;
+      const bottomBox = (await overlay.locator(".player-bottom").boundingBox())!;
+      expect(cueBox.x).toBeGreaterThanOrEqual(0);
+      expect(cueBox.y).toBeGreaterThanOrEqual(0);
+      expect(cueBox.x + cueBox.width).toBeLessThanOrEqual(viewport.width);
+      expect(cueBox.y + cueBox.height).toBeLessThanOrEqual(viewport.height);
+      expect(cueBox.y + cueBox.height).toBeLessThanOrEqual(bottomBox.y + 1);
+    };
+
+    await check();
+    if (testInfo.project.name === "mobile") {
+      const viewport = page.viewportSize()!;
+      await page.setViewportSize({ width: 320, height: viewport.height });
+      await check();
+    }
+  } finally {
+    await request.patch("/api/settings", { data: { subtitleStyle: null } });
+  }
+});
+
+test("picture in picture sits in the bar except on a phone held upright", async ({ page, request }, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "pictureInPictureEnabled", { configurable: true, value: true });
+    HTMLVideoElement.prototype.requestPictureInPicture = function () {
+      return Promise.resolve({} as PictureInPictureWindow);
+    };
+  });
+  await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Katalog", exact: true }).click();
+  await chooseCatalog(page, /Filmy/, "movie");
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await pickAddonStream(page);
+  await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const overlay = page.locator(".player-overlay");
+  const video = overlay.locator("video");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+
+  if (testInfo.project.name === "mobile") {
+    const checkPortrait = async () => {
+      await expect(overlay.locator(".player-view-controls .player-pip-toggle")).toHaveCount(0);
+      await expect(overlay.locator(".player-controls > .player-pip-toggle")).toHaveCount(0);
+      const controls = overlay.locator(".player-controls");
+      const boxes = (await Promise.all(
+        (await overlay.locator(".player-controls > button, .player-view-controls > button").all()).map((button) => button.boundingBox()),
+      )).filter((box): box is NonNullable<typeof box> => box !== null && box.width > 0).sort((a, b) => a.x - b.x);
+      expect(new Set(boxes.map((box) => Math.round(box.y + box.height / 2))).size).toBe(1);
+      const gaps = boxes.slice(1).map((box, index) => box.x - boxes[index]!.x - boxes[index]!.width);
+      expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(1);
+      expect(await controls.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
+    };
+    await checkPortrait();
+    const viewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 360, height: viewport.height });
+    await checkPortrait();
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await checkPortrait();
+    await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+    await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
+    await expect(overlay.locator(".player-settings .player-pip-row")).toBeVisible();
+    await overlay.getByRole("button", { name: "Zavřít nastavení přehrávání" }).click();
+    await page.setViewportSize(viewport);
+  }
+
+  if (testInfo.project.name === "mobile-landscape" || testInfo.project.name === "mobile-landscape-small") {
+    await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+    const pip = overlay.locator(".player-pip-toggle");
+    await expect(pip).toBeVisible();
+    const box = (await pip.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+    expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
+  }
+
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
 });
 
 test("fill-screen toggle is presentation-only, reversible and resets when the player closes", async ({ page, request }) => {

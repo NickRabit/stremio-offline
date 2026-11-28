@@ -24,6 +24,11 @@ describe("endsAt", () => {
   it("clamps a negative position to the start", () => {
     expect(endsAt(1_000, -5, 20)).toBe(21_000);
   });
+
+  it("accounts for the playback speed", () => {
+    expect(endsAt(1_000, 10, 20, 2)).toBe(6_000);
+    expect(endsAt(1_000, 10, 20, 0.5)).toBe(21_000);
+  });
 });
 
 describe("formatEndsAt", () => {

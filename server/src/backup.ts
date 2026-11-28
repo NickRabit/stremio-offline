@@ -16,6 +16,7 @@ import type { StoredSourceProfile } from "./store.js";
 import { STREAM_SORTS } from "./stream-sort.js";
 import { DOWNLOAD_SPEED_LIMITS } from "./byte-rate.js";
 import { parseDownloadWindow } from "./download-window.js";
+import { normalizeSubtitleStyle } from "./subtitle-style.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 /** 2 adds the library roster, so a rule that names a library survives the trip to another
@@ -137,6 +138,8 @@ function parseSettings(value: unknown): Settings {
   const followSourceProfile = typeof source.followSourceProfile === "string" ? source.followSourceProfile : "";
   const defaultRulesProfileId = typeof source.defaultRulesProfileId === "string" ? source.defaultRulesProfileId : "";
   const upNextAt = String(source.upNextAt ?? "");
+  const subtitleStyle = normalizeSubtitleStyle(source.subtitleStyle);
+  const subtitleStyleHdr = normalizeSubtitleStyle(source.subtitleStyleHdr);
   // A personal Home arrangement rides in the backup like every other personal setting; a
   // shape that is not the three arrays is dropped rather than failing the whole import.
   const homeLayout = parseHomeLayout(source.homeLayout);
@@ -156,6 +159,8 @@ function parseSettings(value: unknown): Settings {
     upNextAt: UP_NEXT_AT.includes(upNextAt as UpNextAt) ? upNextAt as UpNextAt : fallback.upNextAt,
     skipSegmentsAuto: boolean("skipSegmentsAuto"),
     hideSpoilers: boolean("hideSpoilers"),
+    ...(subtitleStyle ? { subtitleStyle } : {}),
+    ...(subtitleStyleHdr ? { subtitleStyleHdr } : {}),
     libraryAutoScan: boolean("libraryAutoScan"),
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),

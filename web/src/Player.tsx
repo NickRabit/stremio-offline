@@ -1,7 +1,8 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
+import { exitPictureInPicture, inPictureInPicture, nativeVideoPresentation, pictureInPictureSupported, togglePictureInPicture } from "./player-presentation";
 import type Hls from "hls.js";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, ChevronDown, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, ChevronDown, Download, HardDrive, ListVideo, Star, Gauge, Maximize, Minimize, Pause, PictureInPicture2, Play, RectangleHorizontal, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, guardChildRequest, subtitleUrl } from "./api";
 import { useChildMode } from "./child-mode";
 import { hlsIfLoaded, loadHls } from "./hls-loader";
@@ -10,6 +11,7 @@ import { label, pickAddonSubtitle } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, watchRemuxStart, waitForSeekable } from "./player-hls";
 import { clampVolume, readVolume, writeVolume } from "./player-volume";
+import { applySpeed, formatSpeed, parseSpeed, readSpeed, SPEEDS, stepSpeed, writeSpeed, type Speed } from "./player-speed";
 import { PlaybackWakeLock, screenWakeLock } from "./playback-wake-lock";
 import { initialPlaybackPosition, progressToSave } from "./player-progress";
 import { remoteVersionKey, versionSavedRow } from "./source-progress";
@@ -23,6 +25,7 @@ import { endsAt, formatEndsAt } from "./player-clock";
 import { activeSegment, fitSegments, introQueryOf, upNextPoint, type SegmentKind } from "./player-segments";
 import type { Capabilities, IntroSegments, PlaybackChapter, PlaybackMode, PlaybackSession, SourceProfile, Stream, Subtitle, Track, UpNextAt } from "./types";
 import { toCssPx } from "./ui-scale";
+import { SubtitleText, effectiveSubtitleStyle, subtitleStyleVars, type SubtitleStyle } from "./subtitle-style";
 
 const SIDECAR_SEEK_DEBOUNCE_MS = 600;
 const SIDECAR_SEEK_RETRY_MS = [1_000, 2_000, 4_000, 8_000, 15_000];
@@ -53,6 +56,8 @@ interface Props { previousTitle?: string; onPrevious?: () => Promise<boolean>; n
   startAtSeconds?: number;
   sourceProfiles?: SourceProfile[] | null;
   defaultSort?: string;
+  subtitleStyle?: SubtitleStyle;
+  subtitleStyleHdr?: SubtitleStyle;
 }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -224,16 +229,8 @@ const MODE_KEY: Record<PlaybackMode, Key> = {
   transcode: "player.mode.transcode",
 };
 
-/** Overlay fullscreen keeps the HTML cue layer. Native cues are only for the
- *  video element's own fullscreen (iOS), where those siblings are not shown. */
-const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | null) => {
-  if (document.fullscreenElement === overlay) return false;
-  const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
-  return document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen);
-};
-
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
-const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
+const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f", "p", "<", ">"]);
 const SHORT_END_RESTARTS = 3;
 const SHORT_END_PROGRESS_S = 60;
 const PAUSED_REPORT_MS = 15_000;
@@ -281,7 +278,7 @@ const SKIP_KEY: Record<SegmentKind, Key> = {
   outro: "player.skipOutro",
 };
 
-export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onSaveElsewhere, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, autoNext, open, title, stream, subtitles, subtitleLanguage, audioLanguage, onPreferences, progressKey, progressPoster, progressAddonKey, favorite, fromBeginning = false, onToggleFavorite, onDownload, onSaveElsewhere, onDeviceDownload, onProgressSaved, onClose, sources, startAtSeconds, sourceProfiles = null, defaultSort, upNextAt, skipSegmentsAuto = false, shuffle = false, catalogueKey, subtitleStyle, subtitleStyleHdr }: Props) {
   const { child } = useChildMode();
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
@@ -297,6 +294,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [pictureFilled, setPictureFilled] = useState(false);
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const [volume, setVolume] = useState(readVolume);
+  const [speed, setSpeedState] = useState<Speed>(() => readSpeed());
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const setSpeed = (next: Speed) => {
+    if (next <= 1) setSpeedHint(false);
+    setSpeedState(next);
+    speedRef.current = next;
+    writeSpeed(next);
+  };
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioPreferenceRef = useRef(audioLanguage);
   const subtitlePreferenceRef = useRef<string | null>(subtitleLanguage);
@@ -390,6 +396,23 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     video.addEventListener("volumechange", remember);
     return () => video.removeEventListener("volumechange", remember);
   }, [open, volume]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const apply = () => applySpeed(video, speedRef.current);
+    apply();
+    video.addEventListener("loadedmetadata", apply);
+    return () => video.removeEventListener("loadedmetadata", apply);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (video) applySpeed(video, speed);
+  }, [open, speed]);
+
   const hlsRef = useRef<Hls | null>(null);
   /** Bumped by every attach, so one still waiting for hls.js knows a later one replaced it. */
   const attachSeqRef = useRef(0);
@@ -467,12 +490,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   /** A stall inside a conversion's first two segments, waiting to see whether playback resumes. */
   const earlyStallRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
+  const [speedHint, setSpeedHint] = useState(false);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
   const [resumedFrom, setResumedFrom] = useState(0);
   const [seekKept, setSeekKept] = useState(false);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
+  const [pip, setPip] = useState(false);
+  const [pipAvailable, setPipAvailable] = useState(false);
+  const [phonePortrait, setPhonePortrait] = useState(() => window.matchMedia("(max-width: 700px) and (orientation: portrait)").matches);
   // Hiding subtitles must not touch the session: switching the track on the server
   // restarts FFmpeg and waits for new segments. Only the rendering changes here, so the
   // track keeps running and comes back instantly.
@@ -606,9 +633,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       syncTrackModes();
       showActiveCues();
     };
-    const updateFullscreenMode = () => {
-      useNativeRenderer = nativeVideoFullscreen(video, overlayRef.current);
+    const updatePresentationMode = () => {
+      useNativeRenderer = nativeVideoPresentation(video, overlayRef.current);
       setNativeSubtitles(useNativeRenderer);
+      setPip(inPictureInPicture(video));
       bindTracks();
       cancelAnimationFrame(fullscreenSync);
       fullscreenSync = requestAnimationFrame(() => bindTracks());
@@ -619,18 +647,25 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     video.textTracks.addEventListener("addtrack", bindTracks);
     video.textTracks.addEventListener("change", bindTracks);
     video.addEventListener("loadedmetadata", bindTracks);
-    document.addEventListener("fullscreenchange", updateFullscreenMode);
-    video.addEventListener("webkitbeginfullscreen", updateFullscreenMode);
-    video.addEventListener("webkitendfullscreen", updateFullscreenMode);
+    document.addEventListener("fullscreenchange", updatePresentationMode);
+    video.addEventListener("webkitbeginfullscreen", updatePresentationMode);
+    video.addEventListener("webkitendfullscreen", updatePresentationMode);
+    video.addEventListener("enterpictureinpicture", updatePresentationMode);
+    video.addEventListener("leavepictureinpicture", updatePresentationMode);
+    video.addEventListener("webkitpresentationmodechanged", updatePresentationMode);
+    updatePresentationMode();
     return () => {
       cancelAnimationFrame(fullscreenSync);
       applySubtitleVisibilityRef.current = null;
       video.textTracks.removeEventListener("addtrack", bindTracks);
       video.textTracks.removeEventListener("change", bindTracks);
       video.removeEventListener("loadedmetadata", bindTracks);
-      document.removeEventListener("fullscreenchange", updateFullscreenMode);
-      video.removeEventListener("webkitbeginfullscreen", updateFullscreenMode);
-      video.removeEventListener("webkitendfullscreen", updateFullscreenMode);
+      document.removeEventListener("fullscreenchange", updatePresentationMode);
+      video.removeEventListener("webkitbeginfullscreen", updatePresentationMode);
+      video.removeEventListener("webkitendfullscreen", updatePresentationMode);
+      video.removeEventListener("enterpictureinpicture", updatePresentationMode);
+      video.removeEventListener("leavepictureinpicture", updatePresentationMode);
+      video.removeEventListener("webkitpresentationmodechanged", updatePresentationMode);
       for (const [track, listener] of bound) track.removeEventListener("cuechange", listener);
       for (const track of mirrored) if (track.mode === "hidden") track.mode = "showing";
       setSubtitleText("");
@@ -642,6 +677,43 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     subtitlesHiddenRef.current = subtitlesHidden;
     applySubtitleVisibilityRef.current?.();
   }, [subtitlesHidden]);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 700px) and (orientation: portrait)");
+    const update = () => setPhonePortrait(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!open) { setPip(false); setPipAvailable(false); return; }
+    const video = videoRef.current;
+    if (!video) return;
+    const sync = () => {
+      setPipAvailable(pictureInPictureSupported(video) && video.readyState >= 1);
+      setPip(inPictureInPicture(video));
+    };
+    sync();
+    video.addEventListener("loadedmetadata", sync);
+    video.addEventListener("enterpictureinpicture", sync);
+    video.addEventListener("leavepictureinpicture", sync);
+    video.addEventListener("webkitpresentationmodechanged", sync);
+    return () => {
+      video.removeEventListener("loadedmetadata", sync);
+      video.removeEventListener("enterpictureinpicture", sync);
+      video.removeEventListener("leavepictureinpicture", sync);
+      video.removeEventListener("webkitpresentationmodechanged", sync);
+    };
+  }, [open, session?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    return () => {
+      if (video && document.pictureInPictureElement === video) void exitPictureInPicture(video).catch(() => undefined);
+    };
+  }, [open]);
 
   const detach = () => {
     attachSeqRef.current += 1;
@@ -909,7 +981,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setError(""); setUserPaused(false); setPlaybackFailed(false); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
-    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setDownloadState("idle");
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); setDownloadState("idle");
     decodeRecoversRef.current = []; shortEndsRef.current = 0; shortRestartFromRef.current = null; shortRestartRef.current = false; abandonedRef.current = false; lostRecoveredRef.current = false; lostWhilePausedRef.current = false; escalateRef.current = false; playedRef.current = false; directRefusedRef.current = false; setSidecarReady(false); setSidecarPass(0); sidecarHoldingRef.current = false; sidecarLastStateRef.current = null; sidecarCoverageRef.current = -Infinity; sidecarStartRef.current = -Infinity; cancelSidecarMove(); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there. A start-over
@@ -1273,7 +1345,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const changeQuality = (value: number | null) => {
-    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null);
+    stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false);
     void changeTrack({ quality: value });
   };
 
@@ -1316,6 +1388,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
+    if (speedRef.current > 1) {
+      stallAdviceEpochRef.current += 1;
+      setQualityHint(null);
+      setSpeedHint(true);
+      return;
+    }
+    setSpeedHint(false);
     // A lower quality usually cuts the bitrate, which fixes stalling caused by the network; a file
     // that already fits a quality is copied at its own bitrate, so for one the offer helps less.
     // It also means transcoding, which a weak CPU cannot keep up with unaided -- the advice
@@ -1327,6 +1406,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       hardware: session?.hardware, acceleration: session?.acceleration,
     });
     const offerLower = () => {
+      if (speedRef.current > 1) {
+        setQualityHint(null);
+        setSpeedHint(true);
+        return;
+      }
+      setSpeedHint(false);
       const target = lowerQuality(session?.quality ?? null);
       if (target !== null) setQualityHint(target);
     };
@@ -1605,6 +1690,16 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
+  const togglePip = () => {
+    const video = videoRef.current;
+    if (!video || !pictureInPictureSupported(video)) return;
+    void togglePictureInPicture(video).then(() => {
+      if (playerIsFullscreen(overlayRef.current)) return exitPlayerFullscreen();
+    }).catch((error: unknown) => {
+      report("WARN", "Picture in picture refused", { name: error instanceof Error ? error.name : "Error" });
+    });
+  };
+
   // A rotation carries no user activation, so a fullscreen request made straight from the
   // orientation handler is rejected. The first touch after the rotation does carry one, and that
   // is when the overlay claims the screen. iPhone Safari exposes no Fullscreen API for elements
@@ -1726,7 +1821,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const closePlayer = () => {
-    videoRef.current?.pause();
+    const video = videoRef.current;
+    if (video && inPictureInPicture(video)) void exitPictureInPicture(video).catch(() => undefined);
+    video?.pause();
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
 
@@ -1813,9 +1910,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
       else if (event.key === "c" || event.key === "t") { event.preventDefault(); setSubtitlesHidden((value) => !value); }
+      else if (event.key === "<") { event.preventDefault(); setSpeed(stepSpeed(speedRef.current, -1)); }
+      else if (event.key === ">") { event.preventDefault(); setSpeed(stepSpeed(speedRef.current, 1)); }
       else if (event.key === ",") { event.preventDefault(); nudgeSubtitlesRef.current(-SUBTITLE_DELAY_STEP_S); }
       else if (event.key === ".") { event.preventDefault(); nudgeSubtitlesRef.current(SUBTITLE_DELAY_STEP_S); }
       else if (event.key === "f") void toggleFullscreen();
+      else if (event.key === "p" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const video = videoRef.current;
+        if (video && pictureInPictureSupported(video)) { event.preventDefault(); togglePip(); }
+      }
       else if (event.key === "Escape" && !document.fullscreenElement) closePlayer();
     };
     window.addEventListener("keydown", onKey);
@@ -1829,17 +1932,23 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const position = scrub ?? time;
   const seekable = duration || Math.max(time, 1);
   const badges = playingBadges(session?.playing);
+  const subtitleStyleForSession = effectiveSubtitleStyle(
+    { subtitleStyle, subtitleStyleHdr },
+    Boolean(session?.playing?.hdr),
+  );
+  const subtitleVars = subtitleStyleVars(subtitleStyleForSession);
   const chapters = (session?.chapters?.length ?? 0) >= 2 ? session?.chapters : undefined;
   const chapterIndex = chapterAt(chapters, position);
   // The minute tick only re-renders a paused player; while playing the position moves the clock along.
-  const endAt = endsAt(Math.max(now, Date.now()), position, duration);
+  const endAt = endsAt(Math.max(now, Date.now()), position, duration, speed);
   const segment = activeSegment(segments, position);
   const nextPoint = upNextPoint(upNextAt, duration, segments?.outro);
   const subtitleValue = session?.subtitleTrack !== null && session?.subtitleTrack !== undefined
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
+  const pipLabel = t(pip ? "player.exitPictureInPicture" : "player.pictureInPicture");
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${pictureFilled ? " picture-filled" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}${Object.keys(subtitleVars).length ? " custom-subtitles" : ""}`} style={subtitleVars} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { keyboardControlsRef.current = false; if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong>{badges.length > 0 && <span className="player-badges">{badges.map((badge) => <i key={badge}>{badge}</i>)}</span>}</div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
@@ -1942,15 +2051,20 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           ? <track key={`${session.sidecarUrl}:${sidecarEpoch}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}:${subtitleDelay}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset, subtitleDelay, addonSubtitle.lang || subtitleLanguage)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
-      {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
+      {subtitleText && <div className="player-subtitles" aria-live="off"><SubtitleText text={subtitleText} style={subtitleStyleForSession}/></div>}
       {resumedFrom > 0 && <div className="player-resumed">{t("player.resumedAt", { time: fmt(resumedFrom) })}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>{t("player.playFromStart")}</button></div>}
       {seekKept && !resumedFrom && !error && <div className="player-resumed" role="status">{t("player.seekRestored")}</div>}
       {buffering && !error && <div className="player-buffer">{t("common.loading")}</div>}
       {error && <div className="player-error">{error}</div>}
+      {speedHint && !error && <div className="player-hint">
+        <span>{t("player.speedStalling")}</span>
+        <button onClick={() => { setSpeed(1); stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}>{t("player.speedBackToNormal")}</button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}><X /></button>
+      </div>}
       {qualityHint !== null && !error && <div className="player-hint">
         <span>{t("player.stalling")}</span>
         <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
-        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); }}><X /></button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; stallAdviceEpochRef.current += 1; setQualityHint(null); setSpeedHint(false); }}><X /></button>
       </div>}
       {upNext && <div className="player-up-next" role="status">
         <small>{t("player.upNext")}</small>
@@ -1964,8 +2078,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }}>{t(SKIP_KEY[segment.kind])}</button>}
     </div>
     <div ref={bottomRef} className="player-bottom">
-      {(chapterIndex >= 0 && chapters || endAt !== null) && <div className="player-meta" aria-live="off">
+      {((chapterIndex >= 0 && chapters) || endAt !== null || speed !== 1) && <div className="player-meta" aria-live="off">
         {chapterIndex >= 0 && chapters && <div className="player-chapter">{chapterLabel(chapters, chapterIndex)}</div>}
+        {speed !== 1 && <span className="player-speed">{formatSpeed(speed)}</span>}
         {endAt !== null && <span className="player-ends-at">{t("player.endsAt", { time: formatEndsAt(endAt) })}</span>}
       </div>}
       <div className="timeline">
@@ -1994,6 +2109,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <div className="player-view-controls">
           <button className="player-fill-toggle" aria-label={t("player.fillScreen")} title={t("player.fillScreen")} aria-pressed={pictureFilled} onClick={() => setPictureFilled(!pictureFilled)}><RectangleHorizontal /></button>
           {sources && <button className="player-action player-sources-toggle" aria-label={t("sources.heading")} title={t("sources.heading")} aria-expanded={sourcesOpen} aria-controls="player-sources" onClick={() => sourcesOpen ? setSourcesOpen(false) : openSources()}><ListVideo /> <span>{t("sources.heading")}</span></button>}
+          {pipAvailable && !phonePortrait && <button className="player-pip-toggle" aria-label={pipLabel} title={pipLabel} aria-pressed={pip} onClick={togglePip}><PictureInPicture2 /></button>}
           <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
           {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
         </div>
@@ -2012,6 +2128,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     </div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
+      {pipAvailable && phonePortrait && <button className="player-pip-row" aria-label={pipLabel} title={pipLabel} aria-pressed={pip} onClick={togglePip}><PictureInPicture2 /> {t("player.pictureInPictureRow")}</button>}
+      <label className="track-picker" title={t("player.speedKey")}>
+        <Gauge />
+        <select aria-label={t("player.speed")} value={speed} onChange={(event) => setSpeed(parseSpeed(event.target.value))}>
+          {SPEEDS.map((value) => <option key={value} value={value}>{value === 1 ? t("player.speedNormal") : formatSpeed(value)}</option>)}
+        </select>
+      </label>
       {session && <label className="track-picker" title={t("player.quality")}>
         <SlidersHorizontal />
         <select aria-label={t("player.quality")} value={session.quality ?? "original"}

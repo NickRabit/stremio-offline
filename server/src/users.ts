@@ -288,6 +288,7 @@ export const PERSONAL_SETTINGS = [
   "uiLanguage", "audioLanguage", "subtitleLanguage", "downloadTitleLanguage",
   "mergeByName", "streamSort", "trackProgress", "showResumeRow",
   "upNextAt", "skipSegmentsAuto", "hideSpoilers",
+  "subtitleStyle", "subtitleStyleHdr",
   "tileSize", "catalogTileSize", "libraryTileSize", "favoritesTileSize", "resumeTileSize", "followingTileSize", "catalogTileShape", "libraryTileShape", "favoritesTileShape", "resumeTileShape", "followingTileShape", "homeTileShape", "searchTileShape",
   "startView",
   "libraryShelf",
