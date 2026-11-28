@@ -497,6 +497,9 @@ the account may not see.
 
 ### Player extras
 
+Playback speed and picture in picture are specified in
+[player-extras-spec.md](player-extras-spec.md).
+
 - **Picture in picture** and **playback speed** in the web player (Emby added
   speed to its controls, Nuvio added picture in picture). Both are browser
   features; check that HLS playback and the subtitle overlay survive them.
@@ -554,6 +557,9 @@ checked against `main`. The items below are new; the ones above still stand.
 None of them exists in the code today unless the item says so.
 
 ### Subtitles
+
+Subtitle styling is specified in
+[player-extras-spec.md](player-extras-spec.md#3-subtitle-styling).
 
 - **Automatic subtitle sync** (NuvioTV 1.1 AutoSync, on by default; Stremio
   redesigned its live sync in October 2026): align an addon subtitle to the
