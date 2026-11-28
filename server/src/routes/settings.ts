@@ -37,7 +37,7 @@ import { PERSONAL_SETTINGS, type UserData, type UserRecord } from "../users.js";
 import { asyncRoute, type RouteContext } from "./context.js";
 import { DOWNLOAD_SPEED_LIMITS } from "../byte-rate.js";
 import { parseDownloadWindow, serverTimeZone } from "../download-window.js";
-import { normalizeSubtitleStyle } from "../subtitle-style.js";
+import { DEFAULT_SUBTITLE_STYLE, isDefaultSubtitleStyle, isSubtitleStyle, type SubtitleStyle } from "../subtitle-style.js";
 
 /** The instance settings, one person's own preferences and the backup that carries both. */
 export interface SettingsDeps extends RouteContext {
@@ -268,6 +268,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       {
         ...store.settings(),
         ...prefs,
+        // Always present, so restoring a backup of the default look restores the default look.
+        subtitleStyle: prefs.subtitleStyle ?? DEFAULT_SUBTITLE_STYLE,
         streamSort: normalizeStreamSort(prefs.streamSort, store.sourceProfiles(), prefs.defaultRulesProfileId),
       },
       store.addons(),
@@ -407,6 +409,7 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
         if (split.prefs.subtitleStyleHdr !== undefined && split.prefs.subtitleStyle === undefined) {
           delete data.prefs.subtitleStyle;
         }
+        if (data.prefs.subtitleStyle && isDefaultSubtitleStyle(data.prefs.subtitleStyle)) delete data.prefs.subtitleStyle;
       });
       if (backup.sourceProfiles !== undefined) {
         const live = new Set((state.sourceProfiles ?? []).map((profile) => profile.id));
@@ -500,14 +503,10 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       && (!postedLayout || postedLayout.order.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.hidden.length > HOME_LAYOUT_ROW_LIMIT || postedLayout.feeds.length > HOME_LAYOUT_FEED_LIMIT)) {
       throw new AppError("A Home layout must list an order, the hidden rows and the feeds.", "err.homeLayoutShape", 400);
     }
-    const subtitleStyle = req.body.subtitleStyle === undefined || req.body.subtitleStyle === null
-      ? req.body.subtitleStyle
-      : normalizeSubtitleStyle(req.body.subtitleStyle);
-    const subtitleStyleHdr = req.body.subtitleStyleHdr === undefined || req.body.subtitleStyleHdr === null
-      ? req.body.subtitleStyleHdr
-      : normalizeSubtitleStyle(req.body.subtitleStyleHdr);
-    if ((req.body.subtitleStyle !== undefined && req.body.subtitleStyle !== null && subtitleStyle === undefined)
-      || (req.body.subtitleStyleHdr !== undefined && req.body.subtitleStyleHdr !== null && subtitleStyleHdr === undefined)) {
+    const subtitleStyle: unknown = req.body.subtitleStyle;
+    const subtitleStyleHdr: unknown = req.body.subtitleStyleHdr;
+    if ((subtitleStyle !== undefined && subtitleStyle !== null && !isSubtitleStyle(subtitleStyle))
+      || (subtitleStyleHdr !== undefined && subtitleStyleHdr !== null && !isSubtitleStyle(subtitleStyleHdr))) {
       throw new AppError("A subtitle style must be an object of the known options.", "err.subtitleStyleShape", 400);
     }
     const postedProfile = req.body.downloadSourceProfile;
@@ -527,6 +526,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       // Only when the body reaches the instance half: an ordinary account writing its own
       // preferences is not making an administrator's change and must not be asked to be one.
       if (touchesInstance) assertStillAdmin(state.users ?? [], actor);
+      const touched = () => JSON.stringify([state.settings, userId ? state.userData?.[userId]?.prefs : undefined]);
+      const unchanged = touched();
       // The body is one flat object; each key goes to the half that owns it. Only the keys the
       // body names are written, so a preference nobody touched keeps the value it had.
       const prefs: Record<string, unknown> = { ...(userId ? state.userData?.[userId]?.prefs : undefined) };
@@ -563,13 +564,13 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (req.body.upNextAt !== undefined) prefs.upNextAt = req.body.upNextAt as UpNextAt;
       if (req.body.skipSegmentsAuto !== undefined) prefs.skipSegmentsAuto = Boolean(req.body.skipSegmentsAuto);
       if (req.body.hideSpoilers !== undefined) prefs.hideSpoilers = Boolean(req.body.hideSpoilers);
-      if (req.body.subtitleStyle !== undefined) {
-        if (req.body.subtitleStyle === null) delete prefs.subtitleStyle;
-        else prefs.subtitleStyle = subtitleStyle;
+      if (subtitleStyle !== undefined) {
+        if (subtitleStyle === null) delete prefs.subtitleStyle;
+        else prefs.subtitleStyle = { ...(subtitleStyle as SubtitleStyle) };
       }
-      if (req.body.subtitleStyleHdr !== undefined) {
-        if (req.body.subtitleStyleHdr === null) delete prefs.subtitleStyleHdr;
-        else prefs.subtitleStyleHdr = subtitleStyleHdr;
+      if (subtitleStyleHdr !== undefined) {
+        if (subtitleStyleHdr === null) delete prefs.subtitleStyleHdr;
+        else prefs.subtitleStyleHdr = { ...(subtitleStyleHdr as SubtitleStyle) };
       }
       if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
       if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
@@ -655,6 +656,8 @@ export function registerSettingsRoutes(app: express.Application, deps: SettingsD
       if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
       if (tmdbApiKey !== undefined) state.settings.tmdbApiKey = tmdbApiKey;
       if (userId && touchesPrefs) mutateData(state, userId, (data) => { data.prefs = prefs; });
+      // A save that changes nothing is not written to disk.
+      if (touched() === unchanged) return false;
     });
     const languageChanged = prefsOf(req).uiLanguage !== languageBefore;
     if (tmdbApiKey !== undefined || languageChanged) {

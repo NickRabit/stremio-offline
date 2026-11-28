@@ -51,6 +51,8 @@ interface Harness {
   pendingWrites(): number;
   /** How many writes the route made in total, so a test can prove they landed together. */
   writes(): number;
+  /** How many of those writes found nothing to change and were not persisted. */
+  skipped(): number;
   metaInvalidations(): number;
   queueChanges(): number;
   holdWrites(): void;
@@ -108,6 +110,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   let held: Array<() => void> = [];
   let holding = false;
   let writes = 0;
+  let skipped = 0;
   let metaInvalidations = 0;
   let queueChanges = 0;
   const exportedConnection = { id: `mconn_${"1".repeat(32)}`, provider: "jellyfin" as const, name: "Home", baseUrl: "http://media.example", allowLan: false, allowLoopback: false, serverId: "server-1", accountId: "account-1" };
@@ -143,15 +146,15 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
       libraries: () => state.libraries,
       sourceProfiles: () => state.sourceProfiles ?? [],
       deletedSourceProfileIds: () => state.deletedSourceProfileIds ?? [],
-      update: async (mutate: (value: State) => void) => {
+      update: async (mutate: (value: State) => unknown) => {
         writes += 1;
         if (holding) {
           await new Promise<void>((resolve, reject) => {
-            held.push(() => { try { mutate(state); resolve(); } catch (error) { reject(error); } });
+            held.push(() => { try { if (mutate(state) === false) skipped += 1; resolve(); } catch (error) { reject(error); } });
           });
           return;
         }
-        mutate(state);
+        if (mutate(state) === false) skipped += 1;
       },
     } as unknown as Store,
     needsSetup: () => false,
@@ -195,6 +198,7 @@ const mount = async (options: MountOptions = {}): Promise<Harness> => {
   harness.base = `http://127.0.0.1:${port}`;
   harness.pendingWrites = () => held.length;
   harness.writes = () => writes;
+  harness.skipped = () => skipped;
   harness.metaInvalidations = () => metaInvalidations;
   harness.queueChanges = () => queueChanges;
   harness.holdWrites = () => { holding = true; };
@@ -544,7 +548,7 @@ test("PATCH /api/settings stores a truthy hideSpoilers value as a boolean", asyn
   assert.equal(body.hideSpoilers, true);
 });
 
-test("PATCH /api/settings stores normalised subtitle styles on the caller only", async (t) => {
+test("PATCH /api/settings stores subtitle styles on the caller only", async (t) => {
   const harness = await mount();
   t.after(harness.close);
 
@@ -561,7 +565,7 @@ test("PATCH /api/settings stores normalised subtitle styles on the caller only",
         edge: "outline",
         position: 20,
       },
-      subtitleStyleHdr: { size: 125, color: "blue" },
+      subtitleStyleHdr: { ...DEFAULT_SUBTITLE_STYLE, size: 125 },
     },
   });
 
@@ -609,11 +613,12 @@ test("PATCH /api/settings refuses a malformed subtitle style before writing", as
   harness.state.userData![CAROL]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, position: 5 };
   const writes = harness.writes();
 
-  for (const subtitleStyle of ["large", 200, []]) {
+  const complete = { ...DEFAULT_SUBTITLE_STYLE, color: "cyan" };
+  for (const subtitleStyle of ["large", 200, [], { ...complete, size: 999 }, { size: 125 }, { ...complete, extra: 1 }]) {
     const response = await api(harness.base, "/api/settings", {
       method: "PATCH",
       user: "carol",
-      body: { subtitleStyle, subtitleStyleHdr: { color: "cyan" } },
+      body: { subtitleStyle, subtitleStyleHdr: complete },
     });
     assert.equal(response.status, 400, JSON.stringify(subtitleStyle));
     assert.equal((await response.json() as { messageKey?: string }).messageKey, "err.subtitleStyleShape");
@@ -623,6 +628,42 @@ test("PATCH /api/settings refuses a malformed subtitle style before writing", as
   assert.deepEqual(harness.state.userData?.[CAROL]?.prefs.subtitleStyle, { ...DEFAULT_SUBTITLE_STYLE, position: 5 });
   assert.equal(harness.state.userData?.[CAROL]?.prefs.subtitleStyleHdr, undefined);
   assert.equal(harness.state.userData?.[BOB]?.prefs.subtitleStyle, undefined);
+});
+
+test("PATCH /api/settings writes nothing when the saved style and a repeated reset change nothing", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const style = { ...DEFAULT_SUBTITLE_STYLE, color: "yellow" as const };
+  harness.state.userData![CAROL]!.prefs.subtitleStyle = { ...style };
+  const persisted = () => harness.writes() - harness.skipped();
+  const before = persisted();
+
+  const same = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyle: style } });
+  assert.equal(same.status, 200);
+  const cleared = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyleHdr: null } });
+  assert.equal(cleared.status, 200);
+  assert.equal(persisted(), before);
+
+  const changed = await api(harness.base, "/api/settings", { method: "PATCH", user: "carol", body: { subtitleStyle: { ...style, size: 150 } } });
+  assert.equal(changed.status, 200);
+  assert.equal(persisted(), before + 1);
+});
+
+test("restoring a backup of the default look restores the default look", async (t) => {
+  const harness = await mount();
+  t.after(harness.close);
+  const exported = await api(harness.base, "/api/settings/export", { user: "ada" });
+  assert.equal(exported.status, 200);
+  const backup = await exported.json() as { settings: { subtitleStyle?: unknown } };
+  assert.deepEqual(backup.settings.subtitleStyle, DEFAULT_SUBTITLE_STYLE);
+  harness.state.userData![ADA]!.prefs.subtitleStyle = { ...DEFAULT_SUBTITLE_STYLE, color: "yellow" };
+  harness.state.userData![ADA]!.prefs.subtitleStyleHdr = { ...DEFAULT_SUBTITLE_STYLE, textOpacity: 50 };
+
+  const imported = await api(harness.base, "/api/settings/import", { method: "POST", user: "ada", body: backup });
+
+  assert.equal(imported.status, 200);
+  assert.equal("subtitleStyle" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
+  assert.equal("subtitleStyleHdr" in (harness.state.userData?.[ADA]?.prefs ?? {}), false);
 });
 
 test("PATCH /api/settings sends an instance key to the instance and a personal key to the caller", async (t) => {

@@ -249,7 +249,11 @@ Size: web **S**, TV **S–M**.
     `splitSettings` in `routes/settings.ts` assigns personal keys to that
     account. Add both style keys in both places. Import merges preferences.
     Restoring a backup of an account with an inherited HDR style must clear
-    any HDR override currently on the importing account.
+    any HDR override currently on the importing account. The export always
+    carries `subtitleStyle` (the default when the account has none), so a
+    backup of the default look restores the default look; an imported style
+    equal to the default is stored as absent. A backup without either key (an
+    older export) leaves both styles as they are.
   - `GET` and `PATCH /settings` are already open to users
     (`server/src/roles.ts:145`, `175`). **No new route and no `USER_ALLOWED`
     change is needed.**

@@ -3,6 +3,7 @@ import { genreLabel } from "./genres";
 import { useCrumbsAtEnd } from "./crumbs";
 import { ArrowDown, BarChart3, Bell, BellRing, History, ArrowUp, Check, RectangleHorizontal, RectangleVertical, Copy, FolderInput, FolderOpen, Home as HomeIcon, ImageOff, Images, Info, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, PenLine, RotateCcw, ShieldQuestion, Shuffle, SlidersHorizontal, Sparkles, Star, Link2, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, Film, FolderCog, HardDrive, Library, PackagePlus, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { preloadLibraryPosters, scheduleIdle } from "./library-preload";
+import { mergeSettings } from "./settings-merge";
 import { api, ApiError, ChildRefusedError, describeError, saveToDevice } from "./api";
 import { childViewAllowed, setChildSession } from "./child-policy";
 import { ChildModeProvider } from "./child-mode";
@@ -1722,14 +1723,12 @@ export function App() {
   };
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, tmdbApiKey: _apiKey, ...rest } = patch;
-    // Clearing the Home layout is stored as its absence, so the optimistic state drops the
-    // key rather than carry a `null` the `Settings` shape does not allow.
+    // A cleared key is stored as its absence, so neither the optimistic state nor the answer
+    // may carry it on from before.
     const optimistic = { ...rest } as Partial<AppSettings>;
-    if (optimistic.homeLayout === null) delete optimistic.homeLayout;
-    if (optimistic.subtitleStyle === null) delete optimistic.subtitleStyle;
-    if (optimistic.subtitleStyleHdr === null) delete optimistic.subtitleStyleHdr;
-    if (Object.keys(optimistic).length) setSettings((current: AppSettings) => ({ ...current, ...optimistic }));
-    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => ({ ...current, ...saved })); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
+    for (const key of ["homeLayout", "subtitleStyle", "subtitleStyleHdr"] as const) if (rest[key] === null) delete optimistic[key];
+    if (Object.keys(rest).length) setSettings((current: AppSettings) => mergeSettings(current, optimistic, rest));
+    try { const saved = await api.updateSettings(patch); setSettings((current: AppSettings) => mergeSettings(current, saved, rest)); rememberChosenStartView(saved.startView); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   const rememberSourceProfile = async (downloadSourceProfile: string | null) => {
     const saved = await api.updateSettings({ downloadSourceProfile });

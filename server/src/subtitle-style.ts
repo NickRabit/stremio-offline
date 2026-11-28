@@ -43,3 +43,23 @@ export function normalizeSubtitleStyle(value: unknown): SubtitleStyle | undefine
     position: supported(SUBTITLE_POSITIONS, source.position, DEFAULT_SUBTITLE_STYLE.position),
   };
 }
+
+/** The exact shape a client must send: the seven known fields, each a supported value. */
+export function isSubtitleStyle(value: unknown): value is SubtitleStyle {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const source = value as Record<string, unknown>;
+  const keys = Object.keys(source);
+  return keys.length === 7
+    && (SUBTITLE_SIZES as readonly unknown[]).includes(source.size)
+    && (SUBTITLE_COLORS as readonly unknown[]).includes(source.color)
+    && (SUBTITLE_TEXT_OPACITIES as readonly unknown[]).includes(source.textOpacity)
+    && (SUBTITLE_BACKGROUNDS as readonly unknown[]).includes(source.background)
+    && (SUBTITLE_BACKGROUND_OPACITIES as readonly unknown[]).includes(source.backgroundOpacity)
+    && (SUBTITLE_EDGES as readonly unknown[]).includes(source.edge)
+    && (SUBTITLE_POSITIONS as readonly unknown[]).includes(source.position);
+}
+
+export const isDefaultSubtitleStyle = (style: SubtitleStyle): boolean =>
+  (Object.keys(DEFAULT_SUBTITLE_STYLE) as (keyof SubtitleStyle)[]).every((key) => style[key] === DEFAULT_SUBTITLE_STYLE[key]);

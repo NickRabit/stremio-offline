@@ -1668,6 +1668,15 @@ describe("Player playback speed", () => {
     expect(speedSelect()?.value).toBe("1");
   });
 
+  it("drops the speed hint once the viewer slows to normal speed or below", async () => {
+    await render();
+    await chooseSpeed("2");
+    await stallAt(12);
+    expect(host.querySelector(".player-hint")?.textContent).toContain("Playback keeps stalling at this speed.");
+    await chooseSpeed("0.75");
+    expect(host.querySelector(".player-hint")).toBeNull();
+  });
+
   it("keeps the existing quality advice at normal speed", async () => {
     sessionShape = { acceleration: true, quality: 720 };
     await render();

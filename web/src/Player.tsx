@@ -298,6 +298,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const speedRef = useRef(speed);
   speedRef.current = speed;
   const setSpeed = (next: Speed) => {
+    if (next <= 1) setSpeedHint(false);
     setSpeedState(next);
     speedRef.current = next;
     writeSpeed(next);
